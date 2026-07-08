@@ -42,6 +42,51 @@ Important note:
 2 = Tuesday
 ```
 
+**cron day-of-week field**, both **0 and 7 mean Sunday**.
+
+Cron format:
+
+```bash
+* * * * * command
+│ │ │ │ │
+│ │ │ │ └── Day of week
+│ │ │ └──── Month
+│ │ └────── Day of month
+│ └──────── Hour
+└────────── Minute
+```
+
+Day-of-week values:
+
+| Value | Day       |
+| ----: | --------- |
+|     0 | Sunday    |
+|     1 | Monday    |
+|     2 | Tuesday   |
+|     3 | Wednesday |
+|     4 | Thursday  |
+|     5 | Friday    |
+|     6 | Saturday  |
+|     7 | Sunday    |
+
+So these two cron schedules are the same:
+
+```bash
+0 1 * * 0 /pgbackup/scripts/full_backup.sh
+```
+
+```bash
+0 1 * * 7 /pgbackup/scripts/full_backup.sh
+```
+
+Both mean:
+
+```text
+Run every Sunday at 1:00 AM
+```
+
+NOTE: Recommended using **0 for Sunday** in DBA scripts and documentation.
+
 ---
 
 # 3. Basic Cron Examples
