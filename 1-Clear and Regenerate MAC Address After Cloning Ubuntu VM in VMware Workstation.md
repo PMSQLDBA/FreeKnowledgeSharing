@@ -1,5 +1,3 @@
-Below is a polished **Technical SOP Article** you can save in your GitHub repo or documentation.
-
 # Technical SOP: Clear and Regenerate MAC Address After Cloning Ubuntu VM in VMware Workstation
 
 ## 1. Purpose
