@@ -2,11 +2,12 @@
 
 Files for Download: https://github.com/PMSQLDBA/FreeKnowledgeSharing/blob/main/SQLServesMonitoring_Basic_With_HTML_Alert.zip
 
-**SQL DBA Champs** · one script, all your on-prem instances, one HTML/Excel report, one email.
+**HealthCheck-BasicsOnly** · one script, all your on-prem instances, one HTML/Excel report, one email.
 
 ## Why the central-orchestrator pattern (not per-server Agent jobs)
 
-A per-instance Agent job can't tell you the service is **down** (a dead instance can't run its own job), and stitching many jobs into *one* consolidated email is painful. Instead, one PowerShell script runs from a central monitor box, connects out to every instance, and produces a single rolled-up report. Schedule that one script with a SQL Agent **CmdExec** job or Task Scheduler.
+A per-instance Agent job can't tell you the service is **down** (a dead instance can't run its own job), and stitching many jobs into *one* consolidated email is painful. 
+Instead, one PowerShell script runs from a central monitor box, connects out to every instance, and produces a single rolled-up report. Schedule that one script with a SQL Agent **CmdExec** job or Task Scheduler.
 
 ```
   [ Monitor box ]  Invoke-SqlHealthCheck.ps1
@@ -97,7 +98,7 @@ All thresholds live in the `$Thresholds` hashtable at the top of the script — 
 
 ## Notes
 
-- Delivery defaults to Database Mail when `-UseDatabaseMail` is set; otherwise it uses `Send-MailMessage` (deprecated by MS but fine for a relay). The script forces TLS 1.2 and auto-enables SSL on any port other than 25, which is what Gmail/O365 require.
+- Delivery defaults to Database Mail when `-UseDatabaseMail` is set; otherwise it uses `Send-MailMessage` (deprecated by MS but fine for a relay).The script forces TLS 1.2 and auto-enables SSL on any port other than 25, which is what Gmail/O365 require.
 - **SQL Agent check** uses `sys.dm_server_services`, so it sees the Agent service state even when the database engine is up. A stopped Agent that's set to **Automatic** startup raises WARNING (flip `$Thresholds.AgentStoppedIsCritical` to `$true` for CRITICAL); a stopped Agent on Manual/Disabled startup is treated as intentional and stays OK. When Agent is down, the Failed Agent Jobs check reports "Agent stopped" instead of a misleading "no failed jobs" (nothing runs to fail).
 - **Long-running sessions vs transactions** are two separate checks on purpose. `dm_exec_requests` only shows sessions *actively executing a query right now*, so a `BEGIN TRAN` that never committed (session sleeping / awaiting command) is invisible to it - exactly what `DBCC OPENTRAN` finds. The transactions check keys off `transaction_begin_time` in the tran DMVs, so it catches those idle-but-open transactions (the ones that hold locks and pin the log). Thresholds: `$Thresholds.LongTxnSeconds` / `LongTxnCritSeconds`.
 - The disk check reports only volumes that host database files (the ones that matter). Add a CIM/WMI branch if you want every volume.
