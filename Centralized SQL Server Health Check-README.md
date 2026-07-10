@@ -1,5 +1,7 @@
 # Centralized SQL Server Health Check
 
+Files for Download: https://github.com/PMSQLDBA/FreeKnowledgeSharing/blob/main/SQLServesMonitoring_Basic_With_HTML_Alert.zip
+
 **SQL DBA Champs** · one script, all your on-prem instances, one HTML/Excel report, one email.
 
 ## Why the central-orchestrator pattern (not per-server Agent jobs)
