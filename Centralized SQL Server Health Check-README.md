@@ -1,6 +1,8 @@
 # Centralized SQL Server Health Check
 
 Files for Download: https://github.com/PMSQLDBA/FreeKnowledgeSharing/blob/main/SQLServesMonitoring_Basic_With_HTML_Alert.zip
+Sample output: https://github.com/PMSQLDBA/FreeKnowledgeSharing/blob/main/HealthCheck_20260710_1716.md
+
 
 **HealthCheck-BasicsOnly** · one script, all your on-prem instances, one HTML/Excel report, one email.
 
