@@ -1,0 +1,934 @@
+
+/*==============================================================================================
+THIS AUDIT REPORT DOESN'T SENT ANY MAIL  
+Praveen Madupu  |  SQL Server Login & Authentication Audit
+  ----------------------------------------------------------------------------------------------
+  File        : SDC-AUDIT-LOGIN-REVIEW.sql
+  Purpose     : Single-pass, read-only evidence collection for auditor submission covering
+                login inventory, privileged access, password controls, authentication
+                configuration, database mapping, orphaned users and login activity.
+  Scope       : One instance per execution. Run once per instance in the audit population.
+  Compatible  : SQL Server 2012 through 2022 / Azure SQL Managed Instance (partial),
+                on-prem, AWS EC2, Azure VM.
+  Permissions : sysadmin (or CONTROL SERVER + VIEW ANY DEFINITION + EXECUTE on
+                xp_instance_regread / xp_readerrorlog). Registry and ERRORLOG sections
+                degrade gracefully and log a NOTE if permission is denied.
+  Safety      : 100% read-only. No DDL, no configuration change, no data modification.
+                Safe to run in production during business hours.
+  Control map : PCI-DSS v4.0 req. 7 & 8, SOX ITGC access management, CIS SQL Server Benchmark.
+  ----------------------------------------------------------------------------------------------
+  HOW TO RUN
+    1. Open in SSMS, connect to the target instance.
+    2. Tools > Options > Query Results > SQL Server > Results to Grid >
+       "Include column headers when copying" = ON.
+    3. Set the parameters in SECTION 0 if the defaults do not match your audit standard.
+    4. Execute. Result sets are returned in order:
+         [00] Audit run header / instance metadata
+         [01] Authentication & audit configuration
+         [02] Login inventory
+         [03] Password control exceptions (SQL logins)
+         [04] Weak / blank password test
+         [05] Server role membership (privileged access)
+         [06] Explicit server-level permissions
+         [07] Database user mapping & privileged database roles
+         [08] Orphaned database users
+         [09] Login activity evidence (current sessions + ERRORLOG)
+         [10] Dormant / stale logins
+         [11] FINDINGS SUMMARY  <-- the sheet the auditor reads first
+    5. Right-click each grid > "Save Results As" (CSV), or select all > copy with headers
+       into the audit workbook. One tab per result set, named per the [nn] prefix.
+  ----------------------------------------------------------------------------------------------
+  Author      : Praveen Madupu (PMSQLDBA) | sqldbachamps.com
+  Version     : 1.0
+==============================================================================================*/
+
+SET NOCOUNT ON;
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+
+/*==============================================================================================
+  SECTION 0 : PARAMETERS
+==============================================================================================*/
+DECLARE
+      @StaleLoginDays          INT  = 90    /* Login with no evidence of use in this window = dormant   */
+    , @PasswordMaxAgeDays      INT  = 90    /* Your password rotation standard for SQL logins           */
+    , @ScanErrorLogs           BIT  = 1     /* 1 = parse ERRORLOG for login success/failure evidence    */
+    , @ErrorLogArchivesToScan  INT  = 6     /* 0 = current log only; N = current + N archives           */
+    , @IncludeDatabaseMapping  BIT  = 1     /* 1 = loop all online databases for user mapping           */
+    , @IncludeWeakPasswordTest BIT  = 1     /* 1 = PWDCOMPARE test against common/blank passwords       */
+    , @MaxSysadminCount        INT  = 3;    /* Your standard for max sysadmin members                   */
+
+/*==============================================================================================
+  SECTION 0.1 : WORKING TABLES
+==============================================================================================*/
+IF OBJECT_ID('tempdb..#Findings')      IS NOT NULL DROP TABLE #Findings;
+IF OBJECT_ID('tempdb..#Logins')        IS NOT NULL DROP TABLE #Logins;
+IF OBJECT_ID('tempdb..#DbUsers')       IS NOT NULL DROP TABLE #DbUsers;
+IF OBJECT_ID('tempdb..#ErrorLog')      IS NOT NULL DROP TABLE #ErrorLog;
+IF OBJECT_ID('tempdb..#LoginActivity') IS NOT NULL DROP TABLE #LoginActivity;
+IF OBJECT_ID('tempdb..#WeakPwd')       IS NOT NULL DROP TABLE #WeakPwd;
+
+CREATE TABLE #Findings
+(
+      FindingID     INT IDENTITY(1,1)
+    , Severity      VARCHAR(10)      -- HIGH / MEDIUM / LOW / INFO / NOTE
+    , CheckArea     VARCHAR(60)
+    , Finding       NVARCHAR(400)
+    , Detail        NVARCHAR(2000)
+    , ControlRef    VARCHAR(120)
+);
+
+CREATE TABLE #Logins
+(
+      LoginName            SYSNAME
+    , PrincipalID          INT
+    , LoginSID             VARBINARY(85)
+    , LoginType            VARCHAR(60)
+    , IsDisabled           BIT
+    , CreateDate           DATETIME
+    , ModifyDate           DATETIME
+    , DefaultDatabase      SYSNAME NULL
+    , DefaultLanguage      SYSNAME NULL
+    , CheckPolicy          BIT NULL
+    , CheckExpiration      BIT NULL
+    , IsMustChange         INT NULL
+    , IsLocked             INT NULL
+    , BadPasswordCount     INT NULL
+    , PasswordLastSetTime  DATETIME NULL
+    , PasswordAgeDays      INT NULL
+    , DaysUntilExpiration  INT NULL
+    , IsSysadmin           BIT NULL
+    , ServerRoles          NVARCHAR(1000) NULL
+);
+
+CREATE TABLE #DbUsers
+(
+      DatabaseName    SYSNAME
+    , DbUserName      SYSNAME
+    , DbUserType      VARCHAR(60)
+    , AuthType        VARCHAR(60)
+    , UserSID         VARBINARY(85) NULL
+    , MappedLogin     SYSNAME NULL
+    , IsOrphaned      BIT
+    , DbRoles         NVARCHAR(1000) NULL
+    , DbUserCreated   DATETIME NULL
+);
+
+CREATE TABLE #WeakPwd
+(
+      LoginName   SYSNAME
+    , TestResult  VARCHAR(100)
+);
+
+CREATE TABLE #ErrorLog
+(
+      LogDate      DATETIME
+    , ProcessInfo  NVARCHAR(100)
+    , LogText      NVARCHAR(MAX)
+);
+
+CREATE TABLE #LoginActivity
+(
+      LoginName          SYSNAME
+    , LastSuccessLogin   DATETIME NULL
+    , LastFailedLogin    DATETIME NULL
+    , SuccessCount       INT NULL
+    , FailedCount        INT NULL
+    , EvidenceSource     VARCHAR(60)
+);
+
+DECLARE @SQL              NVARCHAR(MAX);
+DECLARE @DbName           SYSNAME;
+DECLARE @LoginMode        INT = NULL;
+DECLARE @AuditLevel       INT = NULL;
+DECLARE @AuditLevelDesc   VARCHAR(60) = 'Unknown (registry read failed)';
+DECLARE @AuthModeDesc     VARCHAR(60) = 'Unknown (registry read failed)';
+DECLARE @RunTime          DATETIME = GETDATE();
+DECLARE @ErrMsg           NVARCHAR(400);
+
+/*==============================================================================================
+  SECTION 1 : INSTANCE METADATA  -- result set [00]
+==============================================================================================*/
+SELECT
+      [Report]              = 'SQL Server Login & Authentication Audit'
+    , [RunDateTime]         = CONVERT(VARCHAR(19), @RunTime, 120)
+    , [RunAsAccount]        = SUSER_SNAME()
+    , [ServerName]          = CONVERT(SYSNAME, SERVERPROPERTY('MachineName'))
+    , [InstanceName]        = @@SERVERNAME
+    , [Edition]             = CONVERT(VARCHAR(128), SERVERPROPERTY('Edition'))
+    , [ProductVersion]      = CONVERT(VARCHAR(32),  SERVERPROPERTY('ProductVersion'))
+    , [ProductLevel]        = CONVERT(VARCHAR(32),  SERVERPROPERTY('ProductLevel'))
+    , [ProductUpdateLevel]  = CONVERT(VARCHAR(32),  SERVERPROPERTY('ProductUpdateLevel'))
+    , [IsClustered]         = CONVERT(VARCHAR(3),   SERVERPROPERTY('IsClustered'))
+    , [IsHadrEnabled]       = CONVERT(VARCHAR(3),   SERVERPROPERTY('IsHadrEnabled'))
+    , [InstanceStartTime]   = CONVERT(VARCHAR(19), (SELECT sqlserver_start_time FROM sys.dm_os_sys_info), 120)
+    , [ScriptVersion]       = '1.0'
+    , [ScriptRef]           = 'SDC-AUDIT-LOGIN-REVIEW';
+
+/*==============================================================================================
+  SECTION 2 : AUTHENTICATION & AUDIT CONFIGURATION  -- result set [01]
+==============================================================================================*/
+BEGIN TRY
+    EXEC master.dbo.xp_instance_regread
+          N'HKEY_LOCAL_MACHINE'
+        , N'Software\Microsoft\MSSQLServer\MSSQLServer'
+        , N'LoginMode'
+        , @LoginMode OUTPUT;
+END TRY
+BEGIN CATCH
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    VALUES ('NOTE','Authentication config','Could not read LoginMode from registry',
+            ERROR_MESSAGE(), 'Manual verification required');
+END CATCH;
+
+BEGIN TRY
+    EXEC master.dbo.xp_instance_regread
+          N'HKEY_LOCAL_MACHINE'
+        , N'Software\Microsoft\MSSQLServer\MSSQLServer'
+        , N'AuditLevel'
+        , @AuditLevel OUTPUT;
+END TRY
+BEGIN CATCH
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    VALUES ('NOTE','Login auditing','Could not read AuditLevel from registry',
+            ERROR_MESSAGE(), 'Manual verification required');
+END CATCH;
+
+SET @AuthModeDesc = CASE @LoginMode
+                        WHEN 1 THEN 'Windows Authentication only'
+                        WHEN 2 THEN 'Mixed Mode (SQL + Windows)'
+                        ELSE @AuthModeDesc END;
+
+SET @AuditLevelDesc = CASE @AuditLevel
+                        WHEN 0 THEN 'None - NO login auditing'
+                        WHEN 1 THEN 'Successful logins only'
+                        WHEN 2 THEN 'Failed logins only'
+                        WHEN 3 THEN 'Both failed and successful logins'
+                        ELSE @AuditLevelDesc END;
+
+SELECT
+      [Setting]  = 'Server authentication mode'
+    , [Value]    = @AuthModeDesc
+    , [Expected] = 'Windows Authentication only (or Mixed Mode with documented business justification)'
+    , [Status]   = CASE WHEN @LoginMode = 1 THEN 'PASS'
+                        WHEN @LoginMode = 2 THEN 'REVIEW'
+                        ELSE 'UNKNOWN' END
+UNION ALL
+SELECT 'Login auditing level', @AuditLevelDesc,
+       'Both failed and successful logins (minimum: failed logins)',
+       CASE WHEN @AuditLevel = 3 THEN 'PASS'
+            WHEN @AuditLevel = 2 THEN 'PARTIAL'
+            WHEN @AuditLevel IN (0,1) THEN 'FAIL'
+            ELSE 'UNKNOWN' END
+UNION ALL
+SELECT 'C2 audit mode',
+       CASE WHEN (SELECT CONVERT(INT, value_in_use) FROM sys.configurations WHERE name = 'c2 audit mode') = 1
+            THEN 'Enabled' ELSE 'Disabled' END,
+       'Deprecated - Common Criteria or SQL Server Audit preferred', 'INFO'
+UNION ALL
+SELECT 'Common criteria compliance',
+       CASE WHEN (SELECT CONVERT(INT, ISNULL(value_in_use,0)) FROM sys.configurations WHERE name = 'common criteria compliance enabled') = 1
+            THEN 'Enabled' ELSE 'Disabled' END,
+       'Enabled if required by standard (retains last successful login timestamp)', 'INFO'
+UNION ALL
+SELECT 'xp_cmdshell',
+       CASE WHEN (SELECT CONVERT(INT, value_in_use) FROM sys.configurations WHERE name = 'xp_cmdshell') = 1
+            THEN 'Enabled' ELSE 'Disabled' END,
+       'Disabled',
+       CASE WHEN (SELECT CONVERT(INT, value_in_use) FROM sys.configurations WHERE name = 'xp_cmdshell') = 1
+            THEN 'FAIL' ELSE 'PASS' END
+UNION ALL
+SELECT 'Remote admin connections',
+       CASE WHEN (SELECT CONVERT(INT, value_in_use) FROM sys.configurations WHERE name = 'remote admin connections') = 1
+            THEN 'Enabled' ELSE 'Disabled' END,
+       'Per standard', 'INFO'
+UNION ALL
+SELECT 'SQL Server Audit objects defined',
+       CONVERT(VARCHAR(10), (SELECT COUNT(*) FROM sys.server_audits)),
+       'At least one audit capturing SUCCESSFUL_LOGIN_GROUP / FAILED_LOGIN_GROUP',
+       CASE WHEN (SELECT COUNT(*) FROM sys.server_audits) > 0 THEN 'REVIEW' ELSE 'FAIL' END
+UNION ALL
+SELECT 'Logon triggers defined',
+       CONVERT(VARCHAR(10), (SELECT COUNT(*) FROM sys.server_triggers WHERE parent_class_desc = 'SERVER' AND is_disabled = 0)),
+       'Informational - custom logon auditing/restriction', 'INFO';
+
+/* --- SQL Server Audit detail (only if audits exist) --- */
+IF EXISTS (SELECT 1 FROM sys.server_audits)
+BEGIN
+    SELECT
+          [AuditName]        = a.name
+        , [AuditGuid]        = a.audit_guid
+        , [IsEnabled]        = st.status_desc
+        , [Destination]      = a.type_desc
+        , [FilePath]         = af.log_file_path
+        , [OnFailureAction]  = a.on_failure_desc
+        , [AuditSpec]        = sa.name
+        , [SpecEnabled]      = sa.is_state_enabled
+        , [ActionGroup]      = d.audit_action_name
+    FROM sys.server_audits a
+    LEFT JOIN sys.dm_server_audit_status st           ON st.audit_id = a.audit_id
+    LEFT JOIN sys.server_file_audits af               ON af.audit_id = a.audit_id
+    LEFT JOIN sys.server_audit_specifications sa      ON sa.audit_guid = a.audit_guid
+    LEFT JOIN sys.server_audit_specification_details d ON d.server_specification_id = sa.server_specification_id
+    ORDER BY a.name, sa.name, d.audit_action_name;
+END
+
+/*==============================================================================================
+  SECTION 3 : LOGIN INVENTORY  -- result set [02]
+==============================================================================================*/
+INSERT #Logins
+(
+      LoginName, PrincipalID, LoginSID, LoginType, IsDisabled, CreateDate, ModifyDate
+    , DefaultDatabase, DefaultLanguage, CheckPolicy, CheckExpiration
+    , IsMustChange, IsLocked, BadPasswordCount, PasswordLastSetTime, DaysUntilExpiration
+)
+SELECT
+      sp.name
+    , sp.principal_id
+    , sp.sid
+    , sp.type_desc
+    , sp.is_disabled
+    , sp.create_date
+    , sp.modify_date
+    , sp.default_database_name
+    , sp.default_language_name
+    , sl.is_policy_checked
+    , sl.is_expiration_checked
+    , CONVERT(INT,      LOGINPROPERTY(sp.name, 'IsMustChange'))
+    , CONVERT(INT,      LOGINPROPERTY(sp.name, 'IsLocked'))
+    , CONVERT(INT,      LOGINPROPERTY(sp.name, 'BadPasswordCount'))
+    , CONVERT(DATETIME, LOGINPROPERTY(sp.name, 'PasswordLastSetTime'))
+    , CONVERT(INT,      LOGINPROPERTY(sp.name, 'DaysUntilExpiration'))
+FROM sys.server_principals sp
+LEFT JOIN sys.sql_logins sl ON sl.principal_id = sp.principal_id
+WHERE sp.type IN ('S','U','G','C','K')       /* SQL, Windows user, Windows group, cert, asym key */
+  AND sp.name NOT LIKE '##%##';              /* exclude internal certificate-mapped principals    */
+
+UPDATE #Logins
+SET PasswordAgeDays = DATEDIFF(DAY, PasswordLastSetTime, @RunTime)
+WHERE PasswordLastSetTime IS NOT NULL;
+
+/* Flatten server role membership onto the inventory */
+UPDATE l
+SET ServerRoles = STUFF((
+                      SELECT ', ' + r.name
+                      FROM sys.server_role_members rm
+                      JOIN sys.server_principals r ON r.principal_id = rm.role_principal_id
+                      WHERE rm.member_principal_id = l.PrincipalID
+                      ORDER BY r.name
+                      FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(1000)'), 1, 2, '')
+FROM #Logins l;
+
+/* IS_SRVROLEMEMBER resolves nested/Windows group membership as well as direct membership */
+UPDATE #Logins
+SET IsSysadmin = CASE WHEN ISNULL(IS_SRVROLEMEMBER('sysadmin', LoginName), 0) = 1
+                        OR ServerRoles LIKE '%sysadmin%'
+                      THEN 1 ELSE 0 END;
+
+SELECT
+      [#]                    = ROW_NUMBER() OVER (ORDER BY IsSysadmin DESC, LoginType, LoginName)
+    , [LoginName]            = LoginName
+    , [LoginType]            = LoginType
+    , [Status]               = CASE WHEN IsDisabled = 1 THEN 'DISABLED' ELSE 'ENABLED' END
+    , [IsSysadmin]           = CASE WHEN IsSysadmin = 1 THEN 'YES' ELSE 'no' END
+    , [ServerRoles]          = ISNULL(ServerRoles, '(public only)')
+    , [DefaultDatabase]      = DefaultDatabase
+    , [CreatedDate]          = CONVERT(VARCHAR(19), CreateDate, 120)
+    , [LastModifiedDate]     = CONVERT(VARCHAR(19), ModifyDate, 120)
+    , [CheckPolicy]          = CASE WHEN LoginType <> 'SQL_LOGIN' THEN 'n/a'
+                                    WHEN CheckPolicy = 1 THEN 'ON' ELSE 'OFF' END
+    , [CheckExpiration]      = CASE WHEN LoginType <> 'SQL_LOGIN' THEN 'n/a'
+                                    WHEN CheckExpiration = 1 THEN 'ON' ELSE 'OFF' END
+    , [PasswordLastSet]      = CONVERT(VARCHAR(19), PasswordLastSetTime, 120)
+    , [PasswordAgeDays]      = PasswordAgeDays
+    , [DaysUntilExpiration]  = DaysUntilExpiration
+    , [MustChangeAtNextLogin]= CASE WHEN IsMustChange = 1 THEN 'YES' ELSE 'no' END
+    , [IsLockedOut]          = CASE WHEN IsLocked = 1 THEN 'YES' ELSE 'no' END
+    , [BadPasswordCount]     = BadPasswordCount
+    , [LoginSID]             = CONVERT(VARCHAR(100), LoginSID, 1)
+FROM #Logins
+ORDER BY IsSysadmin DESC, LoginType, LoginName;
+
+/*==============================================================================================
+  SECTION 4 : PASSWORD CONTROL EXCEPTIONS (SQL LOGINS)  -- result set [03]
+==============================================================================================*/
+SELECT
+      [LoginName]        = LoginName
+    , [Status]           = CASE WHEN IsDisabled = 1 THEN 'DISABLED' ELSE 'ENABLED' END
+    , [Exception]        = CASE
+                              WHEN CheckPolicy = 0 AND CheckExpiration = 0
+                                   THEN 'CHECK_POLICY OFF and CHECK_EXPIRATION OFF'
+                              WHEN CheckPolicy = 0
+                                   THEN 'CHECK_POLICY OFF (no complexity/lockout enforcement)'
+                              WHEN CheckExpiration = 0
+                                   THEN 'CHECK_EXPIRATION OFF (password never expires)'
+                              WHEN PasswordAgeDays > @PasswordMaxAgeDays
+                                   THEN 'Password older than standard'
+                          END
+    , [PasswordAgeDays]  = PasswordAgeDays
+    , [PasswordLastSet]  = CONVERT(VARCHAR(19), PasswordLastSetTime, 120)
+    , [Severity]         = CASE
+                              WHEN CheckPolicy = 0 AND IsDisabled = 0 THEN 'HIGH'
+                              WHEN CheckExpiration = 0 AND IsDisabled = 0 THEN 'MEDIUM'
+                              WHEN IsDisabled = 1 THEN 'LOW (disabled)'
+                              ELSE 'MEDIUM'
+                          END
+    , [ControlRef]       = 'PCI-DSS 8.3.x / CIS 4.x - password policy enforcement'
+FROM #Logins
+WHERE LoginType = 'SQL_LOGIN'
+  AND (
+        CheckPolicy = 0
+     OR CheckExpiration = 0
+     OR PasswordAgeDays > @PasswordMaxAgeDays
+      )
+ORDER BY
+      CASE WHEN IsDisabled = 0 THEN 0 ELSE 1 END
+    , CheckPolicy
+    , LoginName;
+
+/*==============================================================================================
+  SECTION 5 : WEAK / BLANK PASSWORD TEST  -- result set [04]
+==============================================================================================*/
+IF @IncludeWeakPasswordTest = 1
+BEGIN
+    DECLARE @CommonPwd TABLE (pwd NVARCHAR(128));
+    INSERT @CommonPwd (pwd)
+    VALUES (N''), (N'password'), (N'Password'), (N'Password1'), (N'Password123'), (N'P@ssw0rd')
+         , (N'P@ssword1'), (N'sa'), (N'sql'), (N'sqlserver'), (N'admin'), (N'administrator')
+         , (N'123456'), (N'12345678'), (N'123456789'), (N'abc123'), (N'welcome'), (N'Welcome1')
+         , (N'letmein'), (N'changeme'), (N'test'), (N'test123'), (N'dba'), (N'sqldba')
+         , (N'qwerty'), (N'Summer2024'), (N'Summer2025'), (N'Winter2024'), (N'Winter2025');
+
+    /* Test 1: password matches a well-known weak value */
+    INSERT #WeakPwd (LoginName, TestResult)
+    SELECT sl.name
+         , CASE WHEN c.pwd = N'' THEN 'BLANK PASSWORD'
+                ELSE 'Matches common weak password' END
+    FROM sys.sql_logins sl
+    CROSS JOIN @CommonPwd c
+    WHERE PWDCOMPARE(c.pwd, sl.password_hash) = 1;
+
+    /* Test 2: password equals the login name */
+    INSERT #WeakPwd (LoginName, TestResult)
+    SELECT sl.name, 'Password equals login name'
+    FROM sys.sql_logins sl
+    WHERE PWDCOMPARE(sl.name, sl.password_hash) = 1
+      AND NOT EXISTS (SELECT 1 FROM #WeakPwd w WHERE w.LoginName = sl.name);
+
+    IF EXISTS (SELECT 1 FROM #WeakPwd)
+        SELECT
+              [LoginName]  = w.LoginName
+            , [TestResult] = w.TestResult
+            , [Status]     = CASE WHEN l.IsDisabled = 1 THEN 'DISABLED' ELSE 'ENABLED' END
+            , [IsSysadmin] = CASE WHEN l.IsSysadmin = 1 THEN 'YES' ELSE 'no' END
+            , [Severity]   = CASE WHEN l.IsDisabled = 1 THEN 'MEDIUM' ELSE 'HIGH' END
+            , [ControlRef] = 'PCI-DSS 8.3.1 / SOX ITGC - authentication strength'
+        FROM #WeakPwd w
+        LEFT JOIN #Logins l ON l.LoginName = w.LoginName
+        ORDER BY l.IsDisabled, w.LoginName;
+    ELSE
+        SELECT [WeakPasswordTest] = 'No SQL login matched the blank/common password dictionary.'
+             , [DictionarySize]   = (SELECT COUNT(*) FROM @CommonPwd) + 1
+             , [Result]           = 'PASS';
+END
+
+/*==============================================================================================
+  SECTION 6 : SERVER ROLE MEMBERSHIP (PRIVILEGED ACCESS)  -- result set [05]
+==============================================================================================*/
+SELECT
+      [ServerRole]     = r.name
+    , [MemberLogin]    = m.name
+    , [MemberType]     = m.type_desc
+    , [MemberStatus]   = CASE WHEN m.is_disabled = 1 THEN 'DISABLED' ELSE 'ENABLED' END
+    , [MemberCreated]  = CONVERT(VARCHAR(19), m.create_date, 120)
+    , [MemberModified] = CONVERT(VARCHAR(19), m.modify_date, 120)
+    , [RiskRating]     = CASE r.name
+                            WHEN 'sysadmin'      THEN 'HIGH - full control of instance'
+                            WHEN 'securityadmin' THEN 'HIGH - can grant itself sysadmin'
+                            WHEN 'serveradmin'   THEN 'MEDIUM - can shut down the instance'
+                            WHEN 'setupadmin'    THEN 'MEDIUM - can add linked servers'
+                            WHEN 'processadmin'  THEN 'MEDIUM - can kill sessions'
+                            WHEN 'diskadmin'     THEN 'MEDIUM - can manage disk files'
+                            WHEN 'bulkadmin'     THEN 'MEDIUM - can bulk insert'
+                            WHEN 'dbcreator'     THEN 'MEDIUM - can create/alter any database'
+                            ELSE 'REVIEW'
+                         END
+    , [ControlRef]     = 'PCI-DSS 7.2 / SOX ITGC - least privilege, privileged access review'
+FROM sys.server_role_members rm
+JOIN sys.server_principals r ON r.principal_id = rm.role_principal_id
+JOIN sys.server_principals m ON m.principal_id = rm.member_principal_id
+WHERE m.name NOT LIKE '##%##'
+ORDER BY
+      CASE r.name WHEN 'sysadmin' THEN 1 WHEN 'securityadmin' THEN 2 ELSE 3 END
+    , r.name
+    , m.name;
+
+/*==============================================================================================
+  SECTION 7 : EXPLICIT SERVER-LEVEL PERMISSIONS  -- result set [06]
+==============================================================================================*/
+SELECT
+      [Grantee]        = pr.name
+    , [GranteeType]    = pr.type_desc
+    , [GranteeStatus]  = CASE WHEN pr.is_disabled = 1 THEN 'DISABLED' ELSE 'ENABLED' END
+    , [PermissionState]= p.state_desc
+    , [Permission]     = p.permission_name
+    , [SecurableClass] = p.class_desc
+    , [OnPrincipal]    = tp.name
+    , [GrantedBy]      = gr.name
+    , [RiskRating]     = CASE
+                            WHEN p.permission_name IN ('CONTROL SERVER') THEN 'HIGH - equivalent to sysadmin'
+                            WHEN p.permission_name IN ('ALTER ANY LOGIN','ALTER ANY SERVER ROLE','IMPERSONATE ANY LOGIN')
+                                 THEN 'HIGH - privilege escalation path'
+                            WHEN p.permission_name IN ('IMPERSONATE') THEN 'MEDIUM - review target principal'
+                            WHEN p.state_desc = 'GRANT_WITH_GRANT_OPTION' THEN 'MEDIUM - grantee can re-grant'
+                            ELSE 'LOW'
+                         END
+    , [ControlRef]     = 'PCI-DSS 7.2 / SOX ITGC - least privilege'
+FROM sys.server_permissions p
+JOIN sys.server_principals pr ON pr.principal_id = p.grantee_principal_id
+LEFT JOIN sys.server_principals tp ON tp.principal_id = p.major_id AND p.class = 101  /* SERVER_PRINCIPAL */
+LEFT JOIN sys.server_principals gr ON gr.principal_id = p.grantor_principal_id
+WHERE pr.name NOT LIKE '##%##'
+  AND NOT (pr.name = 'public' AND p.permission_name = 'VIEW ANY DATABASE')   /* default grant */
+  AND NOT (pr.name = 'public' AND p.permission_name = 'CONNECT')             /* default endpoint grants */
+ORDER BY
+      CASE WHEN p.permission_name = 'CONTROL SERVER' THEN 1 ELSE 2 END
+    , pr.name
+    , p.permission_name;
+
+/*==============================================================================================
+  SECTION 8 : DATABASE USER MAPPING  -- result sets [07] and [08]
+==============================================================================================*/
+IF @IncludeDatabaseMapping = 1
+BEGIN
+    DECLARE db_cur CURSOR LOCAL FAST_FORWARD FOR
+        SELECT name
+        FROM sys.databases
+        WHERE state_desc = 'ONLINE'
+          AND HAS_DBACCESS(name) = 1
+          AND source_database_id IS NULL           /* skip snapshots */
+        ORDER BY name;
+
+    OPEN db_cur;
+    FETCH NEXT FROM db_cur INTO @DbName;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        BEGIN TRY
+            SET @SQL = N'
+            USE ' + QUOTENAME(@DbName) + N';
+            INSERT INTO #DbUsers (DatabaseName, DbUserName, DbUserType, AuthType, UserSID, MappedLogin, IsOrphaned, DbRoles, DbUserCreated)
+            SELECT
+                  DatabaseName  = DB_NAME()
+                , DbUserName    = dp.name
+                , DbUserType    = dp.type_desc
+                , AuthType      = dp.authentication_type_desc
+                , UserSID       = dp.sid
+                , MappedLogin   = sp.name
+                , IsOrphaned    = CASE
+                                     WHEN dp.type IN (''S'',''U'',''G'')
+                                      AND dp.sid IS NOT NULL
+                                      AND dp.authentication_type_desc <> ''DATABASE''
+                                      AND sp.sid IS NULL
+                                      AND dp.name NOT IN (''guest'',''dbo'',''sys'',''INFORMATION_SCHEMA'')
+                                     THEN 1 ELSE 0
+                                  END
+                , DbRoles       = STUFF((
+                                      SELECT '', '' + r.name
+                                      FROM sys.database_role_members drm
+                                      JOIN sys.database_principals r ON r.principal_id = drm.role_principal_id
+                                      WHERE drm.member_principal_id = dp.principal_id
+                                      ORDER BY r.name
+                                      FOR XML PATH(''''), TYPE).value(''.'', ''NVARCHAR(1000)''), 1, 2, '''')
+                , DbUserCreated = dp.create_date
+            FROM sys.database_principals dp
+            LEFT JOIN sys.server_principals sp ON sp.sid = dp.sid
+            WHERE dp.type IN (''S'',''U'',''G'',''E'',''X'',''C'',''K'')
+              AND dp.name NOT LIKE ''##%##'';';
+
+            EXEC sp_executesql @SQL;
+        END TRY
+        BEGIN CATCH
+            SET @ErrMsg = ERROR_MESSAGE();
+            INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+            VALUES ('NOTE','Database mapping','Database skipped: ' + @DbName, @ErrMsg, 'Manual verification required');
+        END CATCH;
+
+        FETCH NEXT FROM db_cur INTO @DbName;
+    END
+
+    CLOSE db_cur;
+    DEALLOCATE db_cur;
+
+    /* [07] Full mapping with privileged database roles highlighted */
+    SELECT
+          [DatabaseName]  = u.DatabaseName
+        , [DatabaseUser]  = u.DbUserName
+        , [UserType]      = u.DbUserType
+        , [AuthType]      = u.AuthType
+        , [MappedLogin]   = ISNULL(u.MappedLogin, '(none - orphaned or contained)')
+        , [LoginStatus]   = CASE WHEN l.IsDisabled = 1 THEN 'DISABLED'
+                                 WHEN l.LoginName IS NULL THEN 'n/a'
+                                 ELSE 'ENABLED' END
+        , [DatabaseRoles] = ISNULL(u.DbRoles, '(public only)')
+        , [IsDbOwner]     = CASE WHEN u.DbRoles LIKE '%db_owner%' OR u.DbUserName = 'dbo' THEN 'YES' ELSE 'no' END
+        , [Orphaned]      = CASE WHEN u.IsOrphaned = 1 THEN 'YES' ELSE 'no' END
+        , [UserCreated]   = CONVERT(VARCHAR(19), u.DbUserCreated, 120)
+        , [RiskRating]    = CASE
+                               WHEN u.DbUserName = 'guest' AND u.DbRoles IS NOT NULL THEN 'HIGH - guest has explicit roles'
+                               WHEN u.DbRoles LIKE '%db_owner%'      THEN 'HIGH - full control of database'
+                               WHEN u.DbRoles LIKE '%db_securityadmin%' THEN 'HIGH - can escalate within database'
+                               WHEN u.DbRoles LIKE '%db_accessadmin%'   THEN 'MEDIUM - can add database users'
+                               WHEN u.DbRoles LIKE '%db_datawriter%'    THEN 'MEDIUM - write access to all tables'
+                               ELSE 'LOW'
+                            END
+    FROM #DbUsers u
+    LEFT JOIN #Logins l ON l.LoginName = u.MappedLogin
+    ORDER BY u.DatabaseName, u.DbUserName;
+
+    /* [08] Orphaned users only */
+    IF EXISTS (SELECT 1 FROM #DbUsers WHERE IsOrphaned = 1)
+        SELECT
+              [DatabaseName]  = DatabaseName
+            , [OrphanedUser]  = DbUserName
+            , [UserType]      = DbUserType
+            , [UserSID]       = CONVERT(VARCHAR(100), UserSID, 1)
+            , [DatabaseRoles] = ISNULL(DbRoles, '(public only)')
+            , [UserCreated]   = CONVERT(VARCHAR(19), DbUserCreated, 120)
+            , [Severity]      = CASE WHEN DbRoles LIKE '%db_owner%' THEN 'HIGH' ELSE 'MEDIUM' END
+            , [Remediation]   = 'Remap to a valid login or drop the user (evidence of incomplete deprovisioning)'
+            , [ControlRef]    = 'SOX ITGC - user deprovisioning / PCI-DSS 8.2.6'
+        FROM #DbUsers
+        WHERE IsOrphaned = 1
+        ORDER BY DatabaseName, DbUserName;
+    ELSE
+        SELECT [OrphanedUserCheck] = 'No orphaned database users detected.', [Result] = 'PASS';
+END
+
+/*==============================================================================================
+  SECTION 9 : LOGIN ACTIVITY EVIDENCE  -- result set [09]
+==============================================================================================*/
+/* 9.1 - current connections (point-in-time evidence) */
+INSERT #LoginActivity (LoginName, LastSuccessLogin, SuccessCount, EvidenceSource)
+SELECT
+      s.login_name
+    , MAX(s.login_time)
+    , COUNT(*)
+    , 'sys.dm_exec_sessions (current)'
+FROM sys.dm_exec_sessions s
+WHERE s.is_user_process = 1
+GROUP BY s.login_name;
+
+/* 9.2 - ERRORLOG parse (retention-bound; depends on AuditLevel) */
+IF @ScanErrorLogs = 1
+BEGIN
+    BEGIN TRY
+        DECLARE @LogNum INT = 0;
+        WHILE @LogNum <= @ErrorLogArchivesToScan
+        BEGIN
+            INSERT #ErrorLog (LogDate, ProcessInfo, LogText)
+            EXEC master.dbo.xp_readerrorlog @LogNum, 1, N'Login';
+            SET @LogNum += 1;
+        END
+    END TRY
+    BEGIN CATCH
+        SET @ErrMsg = ERROR_MESSAGE();
+        INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+        VALUES ('NOTE','Login activity','ERRORLOG could not be read (permission or archive missing)',
+                @ErrMsg, 'Manual verification required');
+    END CATCH;
+
+    /* Successful logins: "Login succeeded for user 'X'" */
+    ;WITH SuccessEvents AS
+    (
+        SELECT
+              LoginName = SUBSTRING(LogText,
+                            CHARINDEX('''', LogText) + 1,
+                            CHARINDEX('''', LogText, CHARINDEX('''', LogText) + 1) - CHARINDEX('''', LogText) - 1)
+            , LogDate
+        FROM #ErrorLog
+        WHERE LogText LIKE 'Login succeeded for user%'
+          AND CHARINDEX('''', LogText) > 0
+    )
+    INSERT #LoginActivity (LoginName, LastSuccessLogin, SuccessCount, EvidenceSource)
+    SELECT LoginName, MAX(LogDate), COUNT(*), 'ERRORLOG - successful login'
+    FROM SuccessEvents
+    WHERE LoginName <> ''
+    GROUP BY LoginName;
+
+    /* Failed logins: "Login failed for user 'X'" */
+    ;WITH FailEvents AS
+    (
+        SELECT
+              LoginName = SUBSTRING(LogText,
+                            CHARINDEX('''', LogText) + 1,
+                            CHARINDEX('''', LogText, CHARINDEX('''', LogText) + 1) - CHARINDEX('''', LogText) - 1)
+            , LogDate
+            , LogText
+        FROM #ErrorLog
+        WHERE LogText LIKE 'Login failed for user%'
+          AND CHARINDEX('''', LogText) > 0
+    )
+    INSERT #LoginActivity (LoginName, LastFailedLogin, FailedCount, EvidenceSource)
+    SELECT LoginName, MAX(LogDate), COUNT(*), 'ERRORLOG - failed login'
+    FROM FailEvents
+    WHERE LoginName <> ''
+    GROUP BY LoginName;
+END
+
+SELECT
+      [LoginName]           = l.LoginName
+    , [LoginType]           = l.LoginType
+    , [Status]              = CASE WHEN l.IsDisabled = 1 THEN 'DISABLED' ELSE 'ENABLED' END
+    , [IsSysadmin]          = CASE WHEN l.IsSysadmin = 1 THEN 'YES' ELSE 'no' END
+    , [LastSuccessfulLogin] = CONVERT(VARCHAR(19), a.LastSuccess, 120)
+    , [SuccessfulLogins]    = ISNULL(a.SuccessTotal, 0)
+    , [LastFailedLogin]     = CONVERT(VARCHAR(19), a.LastFailed, 120)
+    , [FailedLogins]        = ISNULL(a.FailedTotal, 0)
+    , [DaysSinceLastLogin]  = CASE WHEN a.LastSuccess IS NULL THEN NULL
+                                   ELSE DATEDIFF(DAY, a.LastSuccess, @RunTime) END
+    , [ActivityAssessment]  = CASE
+                                 WHEN a.LastSuccess IS NULL THEN 'NO EVIDENCE OF USE in retained logs'
+                                 WHEN DATEDIFF(DAY, a.LastSuccess, @RunTime) > @StaleLoginDays THEN 'DORMANT'
+                                 ELSE 'ACTIVE'
+                              END
+    , [EvidenceNote]        = 'ERRORLOG retention and AuditLevel setting bound this evidence window. '
+                              + 'Login auditing level = ' + @AuditLevelDesc
+FROM #Logins l
+LEFT JOIN
+(
+    SELECT
+          LoginName    = LoginName
+        , LastSuccess  = MAX(LastSuccessLogin)
+        , LastFailed   = MAX(LastFailedLogin)
+        , SuccessTotal = SUM(ISNULL(SuccessCount, 0))
+        , FailedTotal  = SUM(ISNULL(FailedCount, 0))
+    FROM #LoginActivity
+    GROUP BY LoginName
+) a ON a.LoginName = l.LoginName
+ORDER BY
+      CASE WHEN a.LastSuccess IS NULL THEN 0 ELSE 1 END
+    , a.LastSuccess
+    , l.LoginName;
+
+/*==============================================================================================
+  SECTION 10 : DORMANT / STALE LOGINS  -- result set [10]
+==============================================================================================*/
+SELECT
+      [LoginName]         = l.LoginName
+    , [LoginType]         = l.LoginType
+    , [Status]            = CASE WHEN l.IsDisabled = 1 THEN 'DISABLED' ELSE 'ENABLED' END
+    , [IsSysadmin]        = CASE WHEN l.IsSysadmin = 1 THEN 'YES' ELSE 'no' END
+    , [ServerRoles]       = ISNULL(l.ServerRoles, '(public only)')
+    , [CreatedDate]       = CONVERT(VARCHAR(19), l.CreateDate, 120)
+    , [AgeDays]           = DATEDIFF(DAY, l.CreateDate, @RunTime)
+    , [LastSuccessLogin]  = CONVERT(VARCHAR(19), a.LastSuccess, 120)
+    , [Assessment]        = CASE WHEN a.LastSuccess IS NULL THEN 'No login evidence in retained logs'
+                                 ELSE 'Last used ' + CONVERT(VARCHAR(10), DATEDIFF(DAY, a.LastSuccess, @RunTime)) + ' days ago' END
+    , [Severity]          = CASE WHEN l.IsSysadmin = 1 AND l.IsDisabled = 0 THEN 'HIGH'
+                                 WHEN l.IsDisabled = 0 THEN 'MEDIUM'
+                                 ELSE 'LOW' END
+    , [Remediation]       = 'Confirm business owner; disable then drop if no longer required'
+    , [ControlRef]        = 'PCI-DSS 8.2.6 - remove/disable inactive accounts / SOX ITGC access review'
+FROM #Logins l
+LEFT JOIN (SELECT LoginName, LastSuccess = MAX(LastSuccessLogin) FROM #LoginActivity GROUP BY LoginName) a
+       ON a.LoginName = l.LoginName
+WHERE l.IsDisabled = 0
+  AND l.LoginName NOT LIKE 'NT SERVICE\%'
+  AND l.LoginName NOT LIKE 'NT AUTHORITY\%'
+  AND (a.LastSuccess IS NULL OR DATEDIFF(DAY, a.LastSuccess, @RunTime) > @StaleLoginDays)
+ORDER BY l.IsSysadmin DESC, l.LoginName;
+
+/*==============================================================================================
+  SECTION 11 : BUILD FINDINGS  -- result set [11]
+==============================================================================================*/
+/* 11.1 Authentication mode */
+IF @LoginMode = 2
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    VALUES ('MEDIUM','Authentication mode','Instance is configured for Mixed Mode authentication',
+            'SQL authentication is enabled. Confirm documented business justification and that each SQL login is required.',
+            'CIS SQL Server Benchmark 1.x / PCI-DSS 8.2');
+
+/* 11.2 Login auditing */
+IF @AuditLevel IN (0,1)
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    VALUES ('HIGH','Login auditing','Failed login auditing is not enabled',
+            'AuditLevel = ' + ISNULL(CONVERT(VARCHAR(5), @AuditLevel), 'unknown')
+            + '. Set to "Both failed and successful logins" (server properties > Security), or deploy SQL Server Audit with FAILED_LOGIN_GROUP.',
+            'PCI-DSS 10.2.1.4 / SOX ITGC - audit logging');
+
+/* 11.3 No SQL Server Audit */
+IF NOT EXISTS (SELECT 1 FROM sys.server_audits)
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    VALUES ('MEDIUM','Login auditing','No SQL Server Audit object is defined on the instance',
+            'ERRORLOG-based auditing is retention-limited and easily recycled. A SQL Server Audit with SUCCESSFUL_LOGIN_GROUP and FAILED_LOGIN_GROUP provides tamper-evident evidence.',
+            'PCI-DSS 10.2 / SOX ITGC');
+
+/* 11.4 sysadmin count */
+DECLARE @SysadminCount INT = (SELECT COUNT(*) FROM #Logins WHERE IsSysadmin = 1 AND IsDisabled = 0);
+IF @SysadminCount > @MaxSysadminCount
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    VALUES ('HIGH','Privileged access','Excessive sysadmin membership',
+            CONVERT(VARCHAR(10), @SysadminCount) + ' enabled logins hold sysadmin against a standard of '
+            + CONVERT(VARCHAR(10), @MaxSysadminCount) + '. See result set [05].',
+            'PCI-DSS 7.2 / SOX ITGC - least privilege');
+
+/* 11.5 sa account */
+IF EXISTS (SELECT 1 FROM #Logins WHERE LoginName = 'sa' AND IsDisabled = 0)
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    VALUES ('MEDIUM','Privileged access','Built-in [sa] account is enabled and not renamed',
+            'The default sa account is a known target. Rename and disable it, and use named administrative accounts for accountability.',
+            'CIS SQL Server Benchmark 2.x / PCI-DSS 8.2.1');
+
+/* 11.6 BUILTIN\Administrators */
+IF EXISTS (SELECT 1 FROM #Logins WHERE LoginName IN ('BUILTIN\Administrators','BUILTIN\Users') AND IsDisabled = 0)
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    VALUES ('HIGH','Privileged access','BUILTIN group is provisioned as a login',
+            'Local administrators inherit SQL Server access, breaking segregation of duties and individual accountability.',
+            'PCI-DSS 7.2 / SOX ITGC - segregation of duties');
+
+/* 11.7 Weak passwords */
+IF EXISTS (SELECT 1 FROM #WeakPwd)
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    SELECT 'HIGH','Password strength','SQL logins with blank or weak passwords detected',
+           CONVERT(VARCHAR(10), COUNT(*)) + ' login(s) matched the weak-password dictionary. See result set [04]. Reset immediately.',
+           'PCI-DSS 8.3.1 / SOX ITGC'
+    FROM #WeakPwd;
+
+/* 11.8 CHECK_POLICY off */
+IF EXISTS (SELECT 1 FROM #Logins WHERE LoginType = 'SQL_LOGIN' AND CheckPolicy = 0 AND IsDisabled = 0)
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    SELECT 'HIGH','Password policy','Enabled SQL logins with CHECK_POLICY = OFF',
+           CONVERT(VARCHAR(10), COUNT(*)) + ' login(s) bypass Windows password complexity and lockout policy. See result set [03].',
+           'PCI-DSS 8.3.6 / CIS 4.2'
+    FROM #Logins WHERE LoginType = 'SQL_LOGIN' AND CheckPolicy = 0 AND IsDisabled = 0;
+
+/* 11.9 CHECK_EXPIRATION off */
+IF EXISTS (SELECT 1 FROM #Logins WHERE LoginType = 'SQL_LOGIN' AND CheckExpiration = 0 AND IsDisabled = 0)
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    SELECT 'MEDIUM','Password policy','Enabled SQL logins with CHECK_EXPIRATION = OFF',
+           CONVERT(VARCHAR(10), COUNT(*)) + ' login(s) have non-expiring passwords. Service accounts require a compensating control (documented rotation).',
+           'PCI-DSS 8.3.9 / CIS 4.3'
+    FROM #Logins WHERE LoginType = 'SQL_LOGIN' AND CheckExpiration = 0 AND IsDisabled = 0;
+
+/* 11.10 Stale passwords */
+IF EXISTS (SELECT 1 FROM #Logins WHERE LoginType = 'SQL_LOGIN' AND IsDisabled = 0 AND PasswordAgeDays > @PasswordMaxAgeDays)
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    SELECT 'MEDIUM','Password policy','SQL logins with passwords older than the rotation standard',
+           CONVERT(VARCHAR(10), COUNT(*)) + ' login(s) exceed ' + CONVERT(VARCHAR(10), @PasswordMaxAgeDays) + ' days. See result set [03].',
+           'PCI-DSS 8.3.9'
+    FROM #Logins WHERE LoginType = 'SQL_LOGIN' AND IsDisabled = 0 AND PasswordAgeDays > @PasswordMaxAgeDays;
+
+/* 11.11 Orphaned users */
+IF EXISTS (SELECT 1 FROM #DbUsers WHERE IsOrphaned = 1)
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    SELECT 'MEDIUM','Deprovisioning','Orphaned database users detected',
+           CONVERT(VARCHAR(10), COUNT(*)) + ' user(s) across ' + CONVERT(VARCHAR(10), COUNT(DISTINCT DatabaseName))
+           + ' database(s) have no matching server login. See result set [08].',
+           'SOX ITGC - deprovisioning / PCI-DSS 8.2.6'
+    FROM #DbUsers WHERE IsOrphaned = 1;
+
+/* 11.12 guest enabled */
+IF EXISTS (SELECT 1 FROM #DbUsers WHERE DbUserName = 'guest' AND DbRoles IS NOT NULL AND DatabaseName NOT IN ('master','tempdb','msdb'))
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    VALUES ('HIGH','Database access','guest user has explicit role membership in a user database',
+            'Any authenticated login can access these databases. REVOKE CONNECT FROM guest in all user databases.',
+            'CIS SQL Server Benchmark 3.x / PCI-DSS 7.2');
+
+/* 11.13 Dormant logins */
+DECLARE @DormantCount INT =
+(
+    SELECT COUNT(*)
+    FROM #Logins l
+    LEFT JOIN (SELECT LoginName, LastSuccess = MAX(LastSuccessLogin) FROM #LoginActivity GROUP BY LoginName) a
+           ON a.LoginName = l.LoginName
+    WHERE l.IsDisabled = 0
+      AND l.LoginName NOT LIKE 'NT SERVICE\%'
+      AND l.LoginName NOT LIKE 'NT AUTHORITY\%'
+      AND (a.LastSuccess IS NULL OR DATEDIFF(DAY, a.LastSuccess, @RunTime) > @StaleLoginDays)
+);
+IF @DormantCount > 0
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    VALUES ('MEDIUM','Account lifecycle','Enabled logins with no evidence of use in the retention window',
+            CONVERT(VARCHAR(10), @DormantCount) + ' login(s). See result set [10]. Note: absence of evidence is bounded by ERRORLOG retention and the login audit level.',
+            'PCI-DSS 8.2.6 / SOX ITGC - periodic access review');
+
+/* 11.14 Locked-out accounts */
+IF EXISTS (SELECT 1 FROM #Logins WHERE IsLocked = 1)
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    SELECT 'LOW','Account lifecycle','SQL logins currently locked out',
+           CONVERT(VARCHAR(10), COUNT(*)) + ' login(s) are locked. Investigate for brute-force activity.',
+           'PCI-DSS 8.3.4'
+    FROM #Logins WHERE IsLocked = 1;
+
+/* 11.15 High failed-login volume */
+IF EXISTS (SELECT 1 FROM #LoginActivity WHERE ISNULL(FailedCount,0) >= 10)
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    SELECT 'MEDIUM','Authentication monitoring','Logins with 10 or more failed attempts in the retained ERRORLOG',
+           CONVERT(VARCHAR(10), COUNT(*)) + ' login name(s). See result set [09]. Investigate source hosts and applications.',
+           'PCI-DSS 10.2.1.4 / 8.3.4'
+    FROM (SELECT LoginName FROM #LoginActivity GROUP BY LoginName HAVING SUM(ISNULL(FailedCount,0)) >= 10) x;
+
+/* 11.16 Positive assurance rows so the auditor sees the checks that passed */
+IF NOT EXISTS (SELECT 1 FROM #Findings WHERE Severity IN ('HIGH','MEDIUM','LOW'))
+    INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+    VALUES ('INFO','Overall','No exceptions identified by the automated checks',
+            'All automated login and authentication checks completed without exception at the time of the run.',
+            'PCI-DSS 7 & 8 / SOX ITGC');
+
+INSERT #Findings (Severity, CheckArea, Finding, Detail, ControlRef)
+VALUES ('INFO','Scope statement','Evidence limitations for the record',
+        'Login activity is derived from sys.dm_exec_sessions (point-in-time) and the SQL Server ERRORLOG (bounded by log recycling and the configured login audit level). '
+        + 'Historical login activity prior to the retained logs cannot be evidenced from the instance without a persisted SQL Server Audit. '
+        + 'Windows group memberships are not expanded by this script; enumerate group members in Active Directory to complete the effective-access population.',
+        'Auditor note');
+
+/* ---- FINDINGS SUMMARY : result set [11] ---- */
+SELECT
+      [#]           = ROW_NUMBER() OVER (ORDER BY CASE Severity
+                                                     WHEN 'HIGH'   THEN 1
+                                                     WHEN 'MEDIUM' THEN 2
+                                                     WHEN 'LOW'    THEN 3
+                                                     WHEN 'NOTE'   THEN 4
+                                                     ELSE 5 END, CheckArea)
+    , [Severity]    = Severity
+    , [CheckArea]   = CheckArea
+    , [Finding]     = Finding
+    , [Detail]      = Detail
+    , [ControlRef]  = ControlRef
+    , [Instance]    = @@SERVERNAME
+    , [AsOf]        = CONVERT(VARCHAR(19), @RunTime, 120)
+FROM #Findings
+ORDER BY
+      CASE Severity WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 WHEN 'NOTE' THEN 4 ELSE 5 END
+    , CheckArea;
+
+/* ---- Counts for the cover page ---- */
+SELECT
+      [Instance]        = @@SERVERNAME
+    , [AsOf]            = CONVERT(VARCHAR(19), @RunTime, 120)
+    , [TotalLogins]     = (SELECT COUNT(*) FROM #Logins)
+    , [EnabledLogins]   = (SELECT COUNT(*) FROM #Logins WHERE IsDisabled = 0)
+    , [DisabledLogins]  = (SELECT COUNT(*) FROM #Logins WHERE IsDisabled = 1)
+    , [SQLLogins]       = (SELECT COUNT(*) FROM #Logins WHERE LoginType = 'SQL_LOGIN')
+    , [WindowsLogins]   = (SELECT COUNT(*) FROM #Logins WHERE LoginType IN ('WINDOWS_LOGIN','WINDOWS_GROUP'))
+    , [SysadminMembers] = @SysadminCount
+    , [DormantLogins]   = @DormantCount
+    , [OrphanedUsers]   = (SELECT COUNT(*) FROM #DbUsers WHERE IsOrphaned = 1)
+    , [WeakPasswords]   = (SELECT COUNT(*) FROM #WeakPwd)
+    , [HighFindings]    = (SELECT COUNT(*) FROM #Findings WHERE Severity = 'HIGH')
+    , [MediumFindings]  = (SELECT COUNT(*) FROM #Findings WHERE Severity = 'MEDIUM')
+    , [LowFindings]     = (SELECT COUNT(*) FROM #Findings WHERE Severity = 'LOW');
+
+/*==============================================================================================
+  CLEANUP
+==============================================================================================*/
+IF OBJECT_ID('tempdb..#Findings')      IS NOT NULL DROP TABLE #Findings;
+IF OBJECT_ID('tempdb..#Logins')        IS NOT NULL DROP TABLE #Logins;
+IF OBJECT_ID('tempdb..#DbUsers')       IS NOT NULL DROP TABLE #DbUsers;
+IF OBJECT_ID('tempdb..#ErrorLog')      IS NOT NULL DROP TABLE #ErrorLog;
+IF OBJECT_ID('tempdb..#LoginActivity') IS NOT NULL DROP TABLE #LoginActivity;
+IF OBJECT_ID('tempdb..#WeakPwd')       IS NOT NULL DROP TABLE #WeakPwd;
+GO
+/*==============================================================================================
+  END OF SCRIPT
+==============================================================================================*/
