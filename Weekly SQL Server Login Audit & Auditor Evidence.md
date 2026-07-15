@@ -1,9 +1,13 @@
 # SOP: Weekly SQL Server Login Audit & Auditor Evidence
 
 **Doc ID:** SDC-SOP-SEC-015 | **Version:** 1.0 | **Classification:** Internal
-**Owner:** SQL Server DBA Team | **Approver:** DBA Lead / IT Security
+
+**Owner:** Praveen Madupu | **Approver:** DBA Lead / IT Security
+
 **Frequency:** Weekly (automated, Mon 06:00) + quarterly submission
+
 **Related artifacts:** `SDC-AUDIT-LOGIN-REVIEW.sql` (v1.1, interactive) · `SDC-AUDIT-LOGIN-REPORT-DEPLOY.sql` (v2.0, scheduled)
+
 **Applies to:** SQL Server 2012–2022 — on-prem, AWS EC2, Azure VM. **Not** Azure SQL DB / Synapse.
 
 ---
@@ -220,7 +224,7 @@ EXEC dbo.usp_LoginAudit_Report @RunId = <n>, @SendMail = 0;
 
 | Ver | Date | Author | Change |
 |---|---|---|---|
-| 1.0 | 2026-07-15 | P. Madupu | Initial. Covers REVIEW v1.1 + DEPLOY v2.0 |
+| 1.0 | 2026-07-15 | Praveen Madupu | Initial. Covers REVIEW v1.1 + DEPLOY v2.0 |
 
 ## Open items
 
