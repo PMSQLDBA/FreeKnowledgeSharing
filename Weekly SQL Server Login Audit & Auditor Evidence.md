@@ -1,6 +1,6 @@
 # SOP: Weekly SQL Server Login Audit & Auditor Evidence 
 
-THIS AUDIT REPORT DOESN'T SENT ANY MAIL  
+THIS AUDIT REPORT DOESN'T SEND ANY MAIL  
 https://github.com/PMSQLDBA/FreeKnowledgeSharing/blob/main/SQL%20Server%20Login%20and%20%20Authentication%20Audit
 
 **Doc ID:** SDC-SOP-SEC-015 | **Version:** 1.0 | **Classification:** Internal
