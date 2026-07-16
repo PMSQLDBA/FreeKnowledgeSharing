@@ -1,7 +1,5 @@
-
 /*==============================================================================================
-THIS AUDIT REPORT DOESN'T SENT ANY MAIL  
-Praveen Madupu  |  SQL Server Login & Authentication Audit
+  SQL Server Login & Authentication Audit
   ----------------------------------------------------------------------------------------------
   File        : SDC-AUDIT-LOGIN-REVIEW.sql
   Purpose     : Single-pass, read-only evidence collection for auditor submission covering
@@ -33,12 +31,13 @@ Praveen Madupu  |  SQL Server Login & Authentication Audit
          [07] Database user mapping & privileged database roles
          [08] Orphaned database users
          [09] Login activity evidence (current sessions + ERRORLOG)
+         [09a] Failed login detail by source host
          [10] Dormant / stale logins
          [11] FINDINGS SUMMARY  <-- the sheet the auditor reads first
     5. Right-click each grid > "Save Results As" (CSV), or select all > copy with headers
        into the audit workbook. One tab per result set, named per the [nn] prefix.
   ----------------------------------------------------------------------------------------------
-  Author      : Praveen Madupu (PMSQLDBA) | sqldbachamps.com
+  Author      : Praveen Madupu (PMSQLDBA)
   Version     : 1.0
 ==============================================================================================*/
 
@@ -65,6 +64,7 @@ IF OBJECT_ID('tempdb..#Logins')        IS NOT NULL DROP TABLE #Logins;
 IF OBJECT_ID('tempdb..#DbUsers')       IS NOT NULL DROP TABLE #DbUsers;
 IF OBJECT_ID('tempdb..#ErrorLog')      IS NOT NULL DROP TABLE #ErrorLog;
 IF OBJECT_ID('tempdb..#LoginActivity') IS NOT NULL DROP TABLE #LoginActivity;
+IF OBJECT_ID('tempdb..#LoginEvents')   IS NOT NULL DROP TABLE #LoginEvents;
 IF OBJECT_ID('tempdb..#WeakPwd')       IS NOT NULL DROP TABLE #WeakPwd;
 
 CREATE TABLE #Findings
@@ -124,6 +124,18 @@ CREATE TABLE #ErrorLog
       LogDate      DATETIME
     , ProcessInfo  NVARCHAR(100)
     , LogText      NVARCHAR(MAX)
+);
+
+/* Parsed login events extracted from #ErrorLog (see SECTION 9.2) */
+CREATE TABLE #LoginEvents
+(
+      LogDate    DATETIME
+    , EventType  VARCHAR(10)
+    , LogText    NVARCHAR(MAX)
+    , Q1         INT NULL          /* position of the opening quote */
+    , Q2         INT NULL          /* position of the closing quote */
+    , LoginName  SYSNAME NULL
+    , ClientHost NVARCHAR(128) NULL
 );
 
 CREATE TABLE #LoginActivity
@@ -637,42 +649,97 @@ BEGIN
                 @ErrMsg, 'Manual verification required');
     END CATCH;
 
-    /* Successful logins: "Login succeeded for user 'X'" */
-    ;WITH SuccessEvents AS
-    (
-        SELECT
-              LoginName = SUBSTRING(LogText,
-                            CHARINDEX('''', LogText) + 1,
-                            CHARINDEX('''', LogText, CHARINDEX('''', LogText) + 1) - CHARINDEX('''', LogText) - 1)
-            , LogDate
-        FROM #ErrorLog
-        WHERE LogText LIKE 'Login succeeded for user%'
-          AND CHARINDEX('''', LogText) > 0
-    )
+    /*------------------------------------------------------------------------------------------
+      PARSE STEP - materialised in stages on purpose.
+      Do NOT collapse this into a single SELECT with a CHARINDEX guard in the WHERE clause:
+      the optimizer is free to evaluate the SUBSTRING before the filter, and any ERRORLOG row
+      without a matched pair of quotes then yields a negative length (Msg 537).
+      Each statement below fully materialises before the next one runs, so the parse only ever
+      sees rows that are already proven safe.
+    ------------------------------------------------------------------------------------------*/
+    /* Step 1 - keep only the two message shapes we parse */
+    INSERT #LoginEvents (LogDate, EventType, LogText)
+    SELECT LogDate
+         , CASE WHEN LogText LIKE N'Login succeeded for user%' THEN 'SUCCESS' ELSE 'FAILED' END
+         , LogText
+    FROM #ErrorLog
+    WHERE LogText LIKE N'Login succeeded for user%'
+       OR LogText LIKE N'Login failed for user%';
+
+    /* Step 2 - locate the quote pair */
+    UPDATE #LoginEvents
+    SET Q1 = CHARINDEX(N'''', LogText);
+
+    UPDATE #LoginEvents
+    SET Q2 = CASE WHEN Q1 > 0 THEN CHARINDEX(N'''', LogText, Q1 + 1) ELSE 0 END;
+
+    /* Step 3 - discard anything that cannot be parsed (unquoted, truncated or localised text) */
+    DELETE FROM #LoginEvents
+    WHERE ISNULL(Q1, 0) = 0
+       OR ISNULL(Q2, 0) <= ISNULL(Q1, 0) + 1;      /* +1 also drops the empty-name '' case */
+
+    /* Step 4 - extract the login name.
+       The length argument itself is guarded, so even if the engine evaluates this expression
+       for a row we intended to filter out, it degrades to an empty string instead of Msg 537. */
+    UPDATE #LoginEvents
+    SET LoginName = NULLIF(LEFT(SUBSTRING(
+                              LogText
+                            , CASE WHEN Q1 > 0 THEN Q1 + 1 ELSE 1 END
+                            , CASE WHEN Q2 > Q1 + 1 THEN Q2 - Q1 - 1 ELSE 0 END), 128), N'');
+
+    /* Step 5 - client host, where the message carries [CLIENT: x.x.x.x].
+       Same guarded-length pattern - the WHERE clause is a filter for efficiency only, the
+       expression is safe on its own. */
+    UPDATE #LoginEvents
+    SET ClientHost = NULLIF(LTRIM(RTRIM(SUBSTRING(
+                              LogText
+                            , CASE WHEN CHARINDEX(N'[CLIENT:', LogText) > 0
+                                   THEN CHARINDEX(N'[CLIENT:', LogText) + 8 ELSE 1 END
+                            , CASE WHEN CHARINDEX(N'[CLIENT:', LogText) > 0
+                                    AND CHARINDEX(N']', LogText, CHARINDEX(N'[CLIENT:', LogText))
+                                        > CHARINDEX(N'[CLIENT:', LogText) + 8
+                                   THEN CHARINDEX(N']', LogText, CHARINDEX(N'[CLIENT:', LogText))
+                                        - CHARINDEX(N'[CLIENT:', LogText) - 8
+                                   ELSE 0 END))), N'')
+    WHERE CHARINDEX(N'[CLIENT:', LogText) > 0;
+
+    /* Step 6 - roll up into the activity table */
     INSERT #LoginActivity (LoginName, LastSuccessLogin, SuccessCount, EvidenceSource)
     SELECT LoginName, MAX(LogDate), COUNT(*), 'ERRORLOG - successful login'
-    FROM SuccessEvents
-    WHERE LoginName <> ''
+    FROM #LoginEvents
+    WHERE EventType = 'SUCCESS'
+      AND LoginName IS NOT NULL
     GROUP BY LoginName;
 
-    /* Failed logins: "Login failed for user 'X'" */
-    ;WITH FailEvents AS
-    (
-        SELECT
-              LoginName = SUBSTRING(LogText,
-                            CHARINDEX('''', LogText) + 1,
-                            CHARINDEX('''', LogText, CHARINDEX('''', LogText) + 1) - CHARINDEX('''', LogText) - 1)
-            , LogDate
-            , LogText
-        FROM #ErrorLog
-        WHERE LogText LIKE 'Login failed for user%'
-          AND CHARINDEX('''', LogText) > 0
-    )
     INSERT #LoginActivity (LoginName, LastFailedLogin, FailedCount, EvidenceSource)
     SELECT LoginName, MAX(LogDate), COUNT(*), 'ERRORLOG - failed login'
-    FROM FailEvents
-    WHERE LoginName <> ''
+    FROM #LoginEvents
+    WHERE EventType = 'FAILED'
+      AND LoginName IS NOT NULL
     GROUP BY LoginName;
+END
+
+/* 9.3 - failed login detail by source host  -- result set [09a] : auditors ask for this */
+IF @ScanErrorLogs = 1
+BEGIN
+    IF EXISTS (SELECT 1 FROM #LoginEvents WHERE EventType = 'FAILED')
+        SELECT
+              [LoginName]        = LoginName
+            , [ClientHost]       = ISNULL(ClientHost, '(not recorded)')
+            , [FailedAttempts]   = COUNT(*)
+            , [FirstAttempt]     = CONVERT(VARCHAR(19), MIN(LogDate), 120)
+            , [LastAttempt]      = CONVERT(VARCHAR(19), MAX(LogDate), 120)
+            , [Assessment]       = CASE WHEN COUNT(*) >= 25 THEN 'HIGH - investigate, possible brute force or credential drift'
+                                        WHEN COUNT(*) >= 10 THEN 'MEDIUM - investigate application/service credential'
+                                        ELSE 'LOW - isolated attempts' END
+            , [ControlRef]       = 'PCI-DSS 10.2.1.4 / 8.3.4'
+        FROM #LoginEvents
+        WHERE EventType = 'FAILED'
+        GROUP BY LoginName, ClientHost
+        ORDER BY COUNT(*) DESC, LoginName;
+    ELSE
+        SELECT [FailedLoginDetail] = 'No failed login events in the retained ERRORLOG window.'
+             , [Caveat]            = 'Confirm the login audit level captures failed logins before treating this as assurance.';
 END
 
 SELECT
@@ -927,6 +994,7 @@ IF OBJECT_ID('tempdb..#Logins')        IS NOT NULL DROP TABLE #Logins;
 IF OBJECT_ID('tempdb..#DbUsers')       IS NOT NULL DROP TABLE #DbUsers;
 IF OBJECT_ID('tempdb..#ErrorLog')      IS NOT NULL DROP TABLE #ErrorLog;
 IF OBJECT_ID('tempdb..#LoginActivity') IS NOT NULL DROP TABLE #LoginActivity;
+IF OBJECT_ID('tempdb..#LoginEvents')   IS NOT NULL DROP TABLE #LoginEvents;
 IF OBJECT_ID('tempdb..#WeakPwd')       IS NOT NULL DROP TABLE #WeakPwd;
 GO
 /*==============================================================================================
