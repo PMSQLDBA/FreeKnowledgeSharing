@@ -1,6 +1,6 @@
 # Standard Operating Procedure (SOP)
 
-Source:
+Reference:
 https://www.dbi-services.com/blog/sql-server-2025-backups-to-secondary-replicas-of-an-availability-group/
 
 Credits To: Stéphane Savorgnano
