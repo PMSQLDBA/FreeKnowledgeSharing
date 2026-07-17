@@ -7,10 +7,9 @@ Credits To: Stéphane Savorgnano
 
 ## SQL Server 2025 – Performing Native Backups on Secondary Replicas in Always On Availability Groups
 
-**Document Version:** 1.0
 **Technology:** SQL Server 2025 Enterprise Edition
+
 **Applies To:** SQL Server 2025 (17.x) Always On Availability Groups
-**Author:** Database Administration Team
 
 ---
 
