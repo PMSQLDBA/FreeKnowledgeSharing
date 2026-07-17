@@ -1,7 +1,9 @@
 # SQL Server Security – **dbo** vs **db_owner**
 
 **Technology:** Microsoft SQL Server (2016–2025)
+
 **Category:** Database Security & Administration
+
 **Applies To:** SQL Server On-Premises, Azure SQL Managed Instance (where applicable)
 
 ---
