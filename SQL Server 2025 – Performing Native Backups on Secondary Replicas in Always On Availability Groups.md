@@ -1,6 +1,8 @@
 # Standard Operating Procedure (SOP)
 
-Source:https://www.dbi-services.com/blog/sql-server-2025-backups-to-secondary-replicas-of-an-availability-group/
+Source:
+https://www.dbi-services.com/blog/sql-server-2025-backups-to-secondary-replicas-of-an-availability-group/
+
 Credits To: Stéphane Savorgnano
 
 ## SQL Server 2025 – Performing Native Backups on Secondary Replicas in Always On Availability Groups
