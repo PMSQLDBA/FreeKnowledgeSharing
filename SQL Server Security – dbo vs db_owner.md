@@ -398,3 +398,6 @@ Although **dbo** and **db_owner** both provide broad administrative capabilities
 The **dbo** principal represents the actual database owner and benefits from special behavior such as bypassing many security checks and being able to restore its own database with `WITH REPLACE`. 
 In contrast, **db_owner** is a fixed database role whose members have extensive administrative permissions but remain subject to SQL Server's permission evaluation, including explicit `DENY` statements. 
 For secure and maintainable environments, organizations should keep database ownership assigned to a dedicated administrative login (commonly **sa**) and grant **db_owner** membership only where full database administration is genuinely required. 
+
+Examples: 
+https://www.dbi-services.com/blog/dbo-vs-db_owner-in-sql-server-what-are-the-differences-between-them/
