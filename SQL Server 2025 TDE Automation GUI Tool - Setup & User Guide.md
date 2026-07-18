@@ -1,10 +1,17 @@
 SQL Server 2025 TDE Automation GUI Tool - Setup & User Guide
+
 Overview
+
 Professional GUI automation tool for SQL Server 2025 Transparent Data Encryption (TDE) with real-time parameters and full operational control.
+
 Version: 1.0  
+
 Author: Praveen Madupu (SQL DBA Champs)  
+
 Status: Production Ready
+
 ---
+
 System Requirements
 Operating System
 Windows Server 2019 or later
@@ -17,6 +24,7 @@ Network Requirements
 Network connectivity to target SQL Server instance
 Port 1433 (default) open for SQL communication
 Administrative privileges on SQL Server
+
 ---
 Installation Guide
 Step 1: Install Python Dependencies
