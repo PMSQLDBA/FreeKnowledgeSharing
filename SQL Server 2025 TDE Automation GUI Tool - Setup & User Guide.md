@@ -60,6 +60,7 @@ pause
 ```
 ---
 Application Features
+
 Tab 1: Connection
 Purpose: Establish and manage SQL Server connections
 Parameters:
@@ -67,6 +68,7 @@ SQL Server: Server name or IP address (e.g., SERVERNAME or 192.168.1.100)
 Database: Target database (default: master)
 Username: SQL Server login (e.g., sa, domain\user)
 Password: SQL Server password (encrypted)
+
 Operations:
 ✓ Connect to SQL Server
 ✓ Test Connection (Ping)
@@ -77,8 +79,10 @@ Connection state (Connected/Not Connected)
 Color-coded status (Green/Red)
 Server version and edition
 Current database info
+
 ---
 Tab 2: Implementation
+
 Purpose: Execute TDE implementation in 4 phases
 Phase 1: Pre-Implementation Backup
 Parameters:
@@ -101,7 +105,9 @@ Create Database Master Key
 Create TDE Server Certificate
 Backup Certificate & Private Key
 Auto-generate dated names
+
 Phase 3: Enable TDE Encryption
+
 Parameters:
 Target Database
 Certificate Name
@@ -118,6 +124,7 @@ Verify encryption status
 Check encryption progress
 Display encryption metrics
 Confirm successful implementation
+
 ---
 Tab 3: Monitoring
 Purpose: Real-time TDE monitoring and diagnostics
@@ -148,9 +155,13 @@ Timestamped entries
 Real-time updates
 Detailed status messages
 Error logging
+
 ---
+
 Tab 4: Maintenance
+
 Purpose: Certificate lifecycle management and renewal
+
 Certificate Expiry Check
 Operations:
 Check all TDE certificates
@@ -158,11 +169,13 @@ Display expiry status
 Color-coded alerts (🔴 Red: Immediate action required)
 Days remaining calculation
 Certificate Renewal
+
 Parameters:
 Old Certificate Name
 New Certificate Name
 Target Database
 New Expiry Date (date picker)
+
 8-Step Renewal Process:
 Backup existing certificate
 Create new certificate
@@ -184,20 +197,24 @@ Purpose: Emergency procedures for encryption reversal
 Encryption Rollback
 Parameters:
 Target Database
+
 Operations:
 Cancel ongoing encryption
 Initiate decryption process
 Monitor decryption progress
 Drop DEK after completion
+
 Safety Features:
 Mandatory confirmation dialog
 Warning message display
 Operation logging
 Rollback status tracking
 Restore from Pre-TDE Backup
+
 Parameters:
 Database Name
 Backup File Path (with browse dialog)
+
 Operations:
 Take database offline
 Execute full restore
@@ -208,35 +225,45 @@ Triple confirmation required
 Explicit data loss warning
 Backup validation
 Pre-restore checks
+
 Rollback Log:
 All rollback operations logged
 Timestamp tracking
 Success/failure status
 Error details and recovery steps
+
 ---
 Tab 6: Scripts
 Purpose: Pre-built T-SQL script library
+
 Available Scripts:
+
 Full Implementation (All Phases)
 Complete 4-phase implementation
 ~300 lines of T-SQL
 All error handling included
+
 Phase 1: Backup Only
 Copy-only backup with verification
 Compression enabled
+
 Phase 2: Certificate Setup
 Master key creation
 Certificate generation
 Certificate backup
+
 Phase 3: Enable TDE
 DEK creation
 TDE enablement
 Async scan initiation
+
 Phase 4: Validation
 Status verification
 Progress monitoring
 Certificate validation
+
 Monitoring Queries
+
 TDE status checks
 Certificate expiry monitoring
 Blocking session detection
@@ -255,12 +282,16 @@ Common issue detection
 Diagnostic queries
 Resolution steps
 Validation scripts
+
 Script Operations:
+
 Copy to Clipboard: One-click copy for SSMS execution
 Save Script: Export to .sql file for version control
 Font: Courier New, 9pt (optimized for readability)
+
 ---
 Real-Time Parameters Reference
+
 Connection Parameters
 Parameter	Type	Default	Range	Required
 SQL Server	String	localhost	Any hostname/IP	Yes
@@ -289,8 +320,10 @@ Parameter	Type	Default	Range	Required
 Database	String	BETA	DB_NAME	Yes
 Backup Path	String	(empty)	Valid .bak file	Yes (for restore)
 Confirmation	Checkbox	Unchecked	True/False	Yes (for restore)
+
 ---
 Operation Workflows
+
 Complete TDE Implementation (Step-by-Step)
 Connection Tab
 Enter SQL Server credentials
@@ -318,8 +351,10 @@ Implementation Tab → Phase 4
 Click "Verify TDE Status"
 Confirm successful encryption
 Implementation complete ✓
+
 ---
 Certificate Renewal (8-Step Process)
+
 Maintenance Tab → Certificate Check
 Click "Check Certificate Expiry"
 Identify certificate(s) to renew
@@ -334,8 +369,11 @@ Confirm thumbprint matches
 Maintenance Tab
 Keep old certificate for backup retention period
 Monitor expiry dates
+
 ---
+
 Emergency Rollback
+
 Rollback Tab
 Read warning message carefully
 If canceling encryption:
@@ -350,14 +388,18 @@ Wait for restore completion
 Connection Tab
 Re-connect to verify database online
 Confirm TDE is disabled
+
 ---
 Logging & Audit
+
 Operation Logs
 Location: Console output + application logs
 Format: Timestamped entries with [HH:MM:SS]
 Retention: Session-based (cleared on restart)
 Export: Copy from output pane or save via right-click
+
 Log Levels
+
 ✓ Success messages (green)
 ⚠️ Warning messages (orange)
 ❌ Error messages (red)
@@ -370,9 +412,12 @@ Success/failure status
 Error messages and stack traces
 Certificate details
 Encryption progress percentages
+
 ---
 Troubleshooting
+
 Connection Issues
+
 Problem: "Connection refused"
 Solution: Verify SQL Server is running and accessible
 Check: `ping <servername>` and telnet to port 1433
@@ -395,6 +440,7 @@ Problem: "Certificate not found"
 Solution: Run "Check Certificate Expiry" to list available certs
 Check: Correct certificate name in parameters
 Create: Generate new certificate if missing
+
 GUI Issues
 Problem: Application crashes
 Solution: Check Python version (3.8+ required)
@@ -406,39 +452,47 @@ Refresh: Click script selector dropdown again
 Restart: Close and reopen application
 ---
 Best Practices
+
 Pre-Implementation
 ☑️ Schedule maintenance window
 ☑️ Backup database to pre-TDE backup
 ☑️ Disable auto-failover (if cluster)
 ☑️ Notify users of maintenance window
 ☑️ Test scripts in non-prod first
+
 During Implementation
 ☑️ Monitor encryption progress constantly
 ☑️ Keep application window open
 ☑️ Do NOT restart SQL Server
 ☑️ Do NOT modify database
 ☑️ Keep backup files secure
+
 Post-Implementation
 ☑️ Verify encryption_state = 3
 ☑️ Test database restores
 ☑️ Update documentation
 ☑️ Set certificate renewal reminder
 ☑️ Archive logs and scripts
+
 Certificate Management
 ☑️ Renew 30 days before expiry
 ☑️ Keep old certificate 1 year (or backup retention period)
 ☑️ Store backups in secure vault (HSM)
 ☑️ Test certificate restore quarterly
 ☑️ Monitor expiry dates monthly
+
 Security
 ☑️ Use strong passwords (12+ chars, special chars)
 ☑️ Secure certificate files (encrypt at rest)
 ☑️ Audit certificate access
 ☑️ Restrict GUI tool access (network/firewall)
 ☑️ Use Windows Authentication when possible
+
 ---
 Support & Documentation
+
 Resources
+
 SQL DBA Champs: sqldbachamps.com
 Microsoft Docs: docs.microsoft.com/sql/relational-databases/security/encryption/transparent-data-encryption
 Deployment: See included 32-page SOP document
@@ -449,16 +503,21 @@ Check "Scripts" tab for solutions
 Refer to "Troubleshooting & Diagnostics" script
 Consult included SOP documentation
 Contact: Praveen Madupu (SQL DBA Champs)
+
 ---
+
 Version History
 Version	Date	Changes
 1.0	Jan 2025	Initial release - Complete feature set
+
 ---
+
 License & Attribution
 SQL Server 2025 TDE Automation GUI Tool  
 Author: Praveen Madupu (SQL DBA Champs)  
 Version: 1.0  
 Status: Production Ready  
+
 © 2025 SQL DBA Champs. All rights reserved.
 ---
 Last Updated: January 2025  
