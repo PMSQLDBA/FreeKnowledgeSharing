@@ -1,10 +1,5 @@
-╔════════════════════════════════════════════════════════════════════════════╗
-║                                                                            ║
-║     SQL SERVER 2025 TDE AUTOMATION TOOL - QUICK REFERENCE GUIDE            ║
-║                                                                            ║
-║                  Complete End-to-End SOP - One Page                        ║
-║                                                                            ║
-╚════════════════════════════════════════════════════════════════════════════╝
+SQL SERVER 2025 TDE AUTOMATION TOOL - QUICK REFERENCE GUIDE 
+Complete End-to-End SOP - One Page 
 
 INSTALLATION (First Time Only)
 ════════════════════════════════════════════════════════════════════════════
