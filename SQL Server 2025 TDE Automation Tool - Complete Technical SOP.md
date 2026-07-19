@@ -1,3 +1,4 @@
+
 # SQL Server 2025 TDE Automation Tool - Complete Technical SOP
 ## End-to-End Standard Operating Procedure
 
@@ -21,6 +22,9 @@
 8. [Troubleshooting](#troubleshooting)
 9. [Emergency Procedures](#emergency-procedures)
 10. [Appendices](#appendices)
+
+---
+<img width="1917" height="1022" alt="TDE_AUTOMATION_TOOL_GUI" src="https://github.com/user-attachments/assets/509f914b-5061-4ab5-a948-0313873db4e4" />
 
 ---
 
