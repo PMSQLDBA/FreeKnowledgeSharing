@@ -1,9 +1,11 @@
 # Instant File Initialization (IFI) in SQL Server
+
 ## Technical SOP & Reference Guide (SQL Server 2019 – 2025)
 
-**Document Owner:** PMSQLDBA
 **Applies To:** SQL Server 2019, 2022, 2025 (On-Premises, AWS EC2, Azure VM)
+
 **Last Reviewed:** June 2026
+
 **Source Validation:** Microsoft Learn — *Database Instant File Initialization* (last updated 2025-07-16)
 
 ---
