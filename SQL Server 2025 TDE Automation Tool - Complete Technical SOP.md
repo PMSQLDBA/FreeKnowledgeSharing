@@ -2,9 +2,9 @@
 ## End-to-End Standard Operating Procedure
 
 **Document Version:** 1.0  
-**Created:** July 18, 2026  
-**Tool Version:** 3.3.1 Professional Edition  
-**Author:** SQL DBA Champs (Praveen Madupu)  
+**Created:** July 18, 2026 - Saturday
+**Tool Version:** V.1 Professional Edition  
+**Author:** Praveen Madupu (PMSQLDBA)
 **Audience:** Database Administrators, Infrastructure Team
 
 ---
