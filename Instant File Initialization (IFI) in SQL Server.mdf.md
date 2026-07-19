@@ -183,23 +183,29 @@ Consider using ALTER DATABASE to set a smaller FILEGROWTH for this file.
 
 ### Scenario A — Large restore SLA breach (Financial Services client)
 A 4 TB production database restore to a DR standby was missing its RTO by over 90 minutes. Root cause: the restore service account on the DR host had never been granted `SE_MANAGE_VOLUME_NAME` — only the primary site had IFI configured. 
+
 **Fix:** extended the post-build hardening checklist to validate IFI via `sys.dm_server_services` on every node in scope, including DR/secondary replicas, not just primaries. Restore time dropped from ~95 minutes to under 20 minutes for the data file portion.
 
 ### Scenario B — TDE rollout silently regressed restore performance
 A team enabled TDE on a 1.2 TB database as part of a compliance initiative without re-validating restore-time SLAs. Because IFI for data files is disabled whenever TDE is active, every restore reverted to full zero-initialization. 
+
 **Lesson:** TDE enablement should trigger a mandatory re-test of restore/backup runbooks and updated RTO documentation — it is not a transparent operation from a performance standpoint, despite the name.
 
 ### Scenario C — Frequent small log autogrowth storms pre-2022
 On a SQL Server 2019 OLTP instance with the log file left at the default 8 MB/10% autogrowth setting, frequent small autogrowth events caused log file fragmentation (excessive VLFs) and recurring `PREEMPTIVE_OS_WRITEFILEGATHER` waits during peak load. 
-Since 2019 has no log-IFI benefit, every single growth event was fully zeroed. **Fix:** pre-sized the log file to its 95th-percentile peak need and set a fixed-MB autogrowth increment (not percentage-based), eliminating the bulk of growth events rather than trying to make growth itself faster.
+Since 2019 has no log-IFI benefit, every single growth event was fully zeroed. 
+
+**Fix:** pre-sized the log file to its 95th-percentile peak need and set a fixed-MB autogrowth increment (not percentage-based), eliminating the bulk of growth events rather than trying to make growth itself faster.
 
 ### Scenario D — SQL Server 2022 AG node with inconsistent log growth performance
 During AG validation in the home lab (VMSQL01/02/03), one secondary replica showed measurably slower log autogrowth than its peers despite all three running SQL Server 2022. 
 Investigation showed the log autogrowth increment had been manually set above 64 MB on that node during a prior tuning pass — disqualifying it from the new instant-log-growth optimization. 
+
 **Fix:** standardized autogrowth increments at 64 MB (or lower, in multiples) across all AG replicas, restoring uniform growth performance and aligning with Microsoft's stated default.
 
 ### Scenario E — Security audit flags IFI as a finding
 During a SOX-driven security review at a banking client, an auditor flagged IFI as a "data leakage risk" without context. 
+
 Rather than disabling IFI (and accepting the restore/autogrowth performance regression across the fleet), the resolution was to produce a documented risk acceptance referencing the DACL-based mitigations on backup storage and detached file handling — satisfying the audit while preserving performance.
 
 ---
