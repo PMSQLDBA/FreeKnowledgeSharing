@@ -5,21 +5,27 @@ INSTALLATION (First Time Only)
 ════════════════════════════════════════════════════════════════════════════
 
 1. Install Python 3.11+
+
    Download: https://www.python.org/downloads/
    Run installer, check "Add Python to PATH"
 
+════════════════════════════════════════════════════════════════════════════
 2. Install ODBC Driver 18
+  
    Download: Microsoft ODBC Driver 18 for SQL Server
    Run installer
-
+════════════════════════════════════════════════════════════════════════════
 3. Install Python Packages
+   
    pip install PyQt5==5.15.9 pyodbc==5.1.1 pyperclip==1.8.2
-
+════════════════════════════════════════════════════════════════════════════
 4. Copy Tool
+  
    Copy: tde_automation_gui_v3_1_final.py to C:\TDE_Tool\
    Create shortcut on desktop
-
+════════════════════════════════════════════════════════════════════════════
 5. Launch Tool
+ 
    Double-click shortcut
    Tool window opens (1600x950)
 
@@ -57,7 +63,9 @@ STEP 2: PREPARE PARAMETERS
    - Backup Path: E:\TDE_Testing\SampleDB.bak
    - Master Key Password: (strong password)
    - Key Encryption Password: (strong password)
+
 2. Click "Auto-Generate Parameters"
+
 3. Verify:
    - Certificate Name: SampleDB_TDE_Cert
    - Cert Backup: E:\TDE_Testing\SampleDB_TDE_Cert.cer
@@ -116,19 +124,19 @@ Phase 8: 8️⃣ Monitor Progress
 STEP 4: VERIFY COMPLETION
 ────────────────────────────────────────────────────────────────────────────
 1. Click "📊 Get Status" in Maintenance section
+
 2. Output should show:
    ✓ Database: SampleDB
    ✓ Status: ENCRYPTED
    ✓ Certificate: SampleDB_TDE_Cert
+
 3. Test database access:
    - Open SQL Server Management Studio
    - Connect to database
    - Run: SELECT * FROM sys.tables
    - Should work normally
 4. Database is now encrypted! ✅
-
 ════════════════════════════════════════════════════════════════════════════
-
 ONGOING MAINTENANCE - DO THIS REGULARLY
 ════════════════════════════════════════════════════════════════════════════
 
@@ -294,7 +302,6 @@ IMPORTANT REMINDERS
   - Keep runbook current
 
 ════════════════════════════════════════════════════════════════════════════
-
 CONTACT & SUPPORT
 ════════════════════════════════════════════════════════════════════════════
 
@@ -308,9 +315,6 @@ Documentation Version: 1.0
 Last Updated: July 18, 2026
 
 ════════════════════════════════════════════════════════════════════════════
-
 That's it! You're ready to encrypt databases! 🔐
-
 For detailed procedures, see the complete SOP document.
-
 ════════════════════════════════════════════════════════════════════════════
