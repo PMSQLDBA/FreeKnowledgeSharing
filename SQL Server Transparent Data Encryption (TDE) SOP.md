@@ -3,6 +3,7 @@
 **Version:** 1.0 | **Date:** July 2026 | **Author:** Praveen Madupu
 
 Reference: 
+
 https://learn.microsoft.com/en-us/sql/relational-databases/security/encryption/transparent-data-encryption?view=sql-server-ver17
 ---
 
