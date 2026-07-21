@@ -1,5 +1,7 @@
---
+DBA_TDE_DB_Audit_Report_HTML_Mail
 
+--Sample Report: 
+https://github.com/PMSQLDBA/FreeKnowledgeSharing/blob/main/Sample%20HTML%20Report.pdf
 
 CREATE OR ALTER PROC DBA_TDE_DB_Audit_Report_HTML_Mail
 AS
@@ -152,8 +154,8 @@ BEGIN
 
     -- Send mail with HTML body and CSV Attachment
     EXEC msdb.dbo.sp_send_dbmail
-        @profile_name = 'DBAAlerts',
-        @recipients = 'praveensqldba12@gmail.com',
+        @profile_name = 'DBAAlerts',                       -- Update your DB Mail Profile Name here
+        @recipients = 'praveensqldba12@gmail.com',         -- Update your mail id here
         @subject = 'SQL Server TDE Compliance Report',
         @body = @HTML,
         @body_format = 'HTML',
