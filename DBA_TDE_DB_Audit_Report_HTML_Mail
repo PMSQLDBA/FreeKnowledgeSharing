@@ -1,0 +1,191 @@
+--
+
+
+CREATE OR ALTER PROC DBA_TDE_DB_Audit_Report_HTML_Mail
+AS
+BEGIN
+    DECLARE @HTML NVARCHAR(MAX);
+    DECLARE @SummaryTable NVARCHAR(MAX);
+    DECLARE @CertTable NVARCHAR(MAX);
+    DECLARE @EncryptedTable NVARCHAR(MAX);
+    DECLARE @UnencryptedTable NVARCHAR(MAX);
+
+    -- 1. Build Summary Table HTML
+    SELECT @SummaryTable = N'
+        <h3 style="font-family: Arial, sans-serif; color: #333;">TDE Compliance Summary</h3>
+        <table border="1" cellpadding="5" cellspacing="0" style="font-family: Arial, sans-serif; font-size: 12px; border-collapse: collapse;">
+            <tr style="background-color: #f2f2f2;">
+                <th>ServerName</th>
+                <th>TotalDatabases</th>
+                <th>EncryptedDatabases</th>
+                <th>UnencryptedDatabases</th>
+            </tr>' +
+            CAST((
+                SELECT 
+                    td = @@SERVERNAME, '',
+                    td = COUNT(d.database_id), '',
+                    td = SUM(CASE WHEN d.is_encrypted = 1 THEN 1 ELSE 0 END), '',
+                    td = SUM(CASE WHEN d.is_encrypted = 0 THEN 1 ELSE 0 END)
+                FROM sys.databases d
+                WHERE d.database_id > 4
+                FOR XML PATH('tr'), TYPE
+            ) AS NVARCHAR(MAX)) + N'
+        </table><br>';
+
+    -- 2. Build Certificate Status Table HTML (Sorted alphabetically by name)
+    SELECT @CertTable = N'
+        <h3 style="font-family: Arial, sans-serif; color: #333;">Certificate Status Details</h3>
+        <table border="1" cellpadding="5" cellspacing="0" style="font-family: Arial, sans-serif; font-size: 11px; border-collapse: collapse;">
+            <tr style="background-color: #f2f2f2;">
+                <th>CertificateName</th>
+                <th>TDEEnabledDate</th>
+                <th>expiry_date</th>
+                <th>DaysRemaining</th>
+                <th>CertificateStatus</th>
+            </tr>' +
+            CAST((
+                SELECT 
+                    td = c.name, '',
+                    td = ISNULL(CAST((SELECT MIN(sub_d.create_date) FROM sys.databases sub_d JOIN sys.dm_database_encryption_keys sub_dek ON sub_d.database_id = sub_dek.database_id WHERE sub_dek.encryptor_thumbprint = c.thumbprint) AS VARCHAR(50)), 'NULL'), '',
+                    td = CAST(c.expiry_date AS VARCHAR(50)), '',
+                    td = DATEDIFF(day, GETDATE(), c.expiry_date), '',
+                    td = CASE WHEN c.expiry_date < GETDATE() THEN 'EXPIRED' ELSE 'HEALTHY' END
+                FROM master.sys.certificates c
+                WHERE c.name NOT LIKE '##%' 
+                  AND EXISTS (
+                      SELECT 1 
+                      FROM sys.dm_database_encryption_keys dek 
+                      WHERE dek.encryptor_thumbprint = c.thumbprint
+                  )
+                ORDER BY c.name ASC
+                FOR XML PATH('tr'), TYPE
+            ) AS NVARCHAR(MAX)) + N'
+        </table><br>';
+
+    -- 3a. Build Encrypted Databases Table HTML (Sorted alphabetically by database name)
+    SELECT @EncryptedTable = N'
+        <h3 style="font-family: Arial, sans-serif; color: #333;">Encrypted DB''s</h3>
+        <table border="1" cellpadding="5" cellspacing="0" style="font-family: Arial, sans-serif; font-size: 11px; border-collapse: collapse;">
+            <tr style="background-color: #f2f2f2;">
+                <th>DatabaseName</th>
+                <th>DatabaseState</th>
+                <th>EncryptionStatus</th>
+                <th>encryption_state_desc</th>
+                <th>percent_complete</th>
+                <th>key_algorithm</th>
+                <th>key_length</th>
+                <th>CertificateName</th>
+                <th>TDEEnabledDate</th>
+                <th>expiry_date</th>
+            </tr>' +
+            ISNULL(CAST((
+                SELECT 
+                    td = d.name, '',
+                    td = d.state_desc, '',
+                    td = 'ENCRYPTED', '',
+                    td = ISNULL(dek.encryption_state_desc, 'NULL'), '',
+                    td = ISNULL(CAST(dek.percent_complete AS VARCHAR(50)), 'NULL'), '',
+                    td = ISNULL(dek.key_algorithm, 'NULL'), '',
+                    td = ISNULL(CAST(dek.key_length AS VARCHAR(50)), 'NULL'), '',
+                    td = ISNULL(c.name, 'NULL'), '',
+                    td = ISNULL(CAST(d.create_date AS VARCHAR(50)), 'NULL'), '',
+                    td = ISNULL(CAST(c.expiry_date AS VARCHAR(50)), 'NULL')
+                FROM sys.databases d
+                LEFT JOIN sys.dm_database_encryption_keys dek ON d.database_id = dek.database_id
+                LEFT JOIN master.sys.certificates c ON dek.encryptor_thumbprint = c.thumbprint
+                WHERE d.database_id > 4 AND d.is_encrypted = 1
+                ORDER BY d.name ASC
+                FOR XML PATH('tr'), TYPE
+            ) AS NVARCHAR(MAX)), N'<tr><td colspan="10" align="center">No Encrypted Databases Found</td></tr>') + N'
+        </table><br>';
+
+    -- 3b. Build Non-Encrypted Databases Table HTML (Sorted alphabetically by database name)
+    SELECT @UnencryptedTable = N'
+        <h3 style="font-family: Arial, sans-serif; color: #333;">Non-Encrypted DB''s</h3>
+        <table border="1" cellpadding="5" cellspacing="0" style="font-family: Arial, sans-serif; font-size: 11px; border-collapse: collapse;">
+            <tr style="background-color: #f2f2f2;">
+                <th>DatabaseName</th>
+                <th>DatabaseState</th>
+                <th>EncryptionStatus</th>
+                <th>encryption_state_desc</th>
+                <th>percent_complete</th>
+                <th>key_algorithm</th>
+                <th>key_length</th>
+                <th>CertificateName</th>
+                <th>expiry_date</th>
+            </tr>' +
+            ISNULL(CAST((
+                SELECT 
+                    td = d.name, '',
+                    td = d.state_desc, '',
+                    td = 'NOT ENCRYPTED', '',
+                    td = ISNULL(dek.encryption_state_desc, 'NULL'), '',
+                    td = ISNULL(CAST(dek.percent_complete AS VARCHAR(50)), 'NULL'), '',
+                    td = ISNULL(dek.key_algorithm, 'NULL'), '',
+                    td = ISNULL(CAST(dek.key_length AS VARCHAR(50)), 'NULL'), '',
+                    td = ISNULL(c.name, 'NULL'), '',
+                    td = ISNULL(CAST(c.expiry_date AS VARCHAR(50)), 'NULL')
+                FROM sys.databases d
+                LEFT JOIN sys.dm_database_encryption_keys dek ON d.database_id = dek.database_id
+                LEFT JOIN master.sys.certificates c ON dek.encryptor_thumbprint = c.thumbprint
+                WHERE d.database_id > 4 AND d.is_encrypted = 0
+                ORDER BY d.name ASC
+                FOR XML PATH('tr'), TYPE
+            ) AS NVARCHAR(MAX)), N'<tr><td colspan="9" align="center">No Unencrypted Databases Found</td></tr>') + N'
+        </table>';
+
+    -- Combine everything into the final HTML body
+    SET @HTML = N'
+    <html>
+    <head>
+        <style>
+            body { font-family: Arial, sans-serif; }
+            table { border-color: #ccc; }
+            th { background-color: #007acc; color: white; padding: 6px; }
+            td { padding: 5px; }
+        </style>
+    </head>
+    <body>
+        ' + @SummaryTable + @CertTable + @EncryptedTable + @UnencryptedTable + N'
+    </body>
+    </html>';
+
+    -- Send mail with HTML body and CSV Attachment
+    EXEC msdb.dbo.sp_send_dbmail
+        @profile_name = 'DBAAlerts',
+        @recipients = 'praveensqldba12@gmail.com',
+        @subject = 'SQL Server TDE Compliance Report',
+        @body = @HTML,
+        @body_format = 'HTML',
+        @query = '
+        SELECT 
+            @@SERVERNAME AS ServerName,
+            COUNT(d.database_id) AS TotalDatabases,
+            SUM(CASE WHEN d.is_encrypted = 1 THEN 1 ELSE 0 END) AS EncryptedDatabases,
+            SUM(CASE WHEN d.is_encrypted = 0 THEN 1 ELSE 0 END) AS UnencryptedDatabases
+        FROM sys.databases d
+        WHERE d.database_id > 4;
+
+        SELECT
+            d.name AS DatabaseName,
+            d.state_desc AS DatabaseState,
+            CASE WHEN d.is_encrypted = 1 THEN ''ENCRYPTED'' ELSE ''NOT ENCRYPTED'' END AS EncryptionStatus,
+            dek.encryption_state_desc,
+            CAST(dek.percent_complete AS VARCHAR(50)) AS percent_complete,
+            dek.key_algorithm,
+            CAST(dek.key_length AS VARCHAR(50)) AS key_length,
+            c.name AS CertificateName,
+            CAST(d.create_date AS VARCHAR(50)) AS TDEEnabledDate,
+            CAST(c.expiry_date AS VARCHAR(50)) AS expiry_date
+        FROM sys.databases d
+        LEFT JOIN sys.dm_database_encryption_keys dek ON d.database_id = dek.database_id
+        LEFT JOIN master.sys.certificates c ON dek.encryptor_thumbprint = c.thumbprint
+        WHERE d.database_id > 4
+        ORDER BY d.name ASC;
+        ',
+        @attach_query_result_as_file = 1,
+        @query_attachment_filename = 'TDE_Compliance_Report.csv',
+        @query_result_separator = ',',
+        @query_result_no_padding = 1;
+END
+GO
