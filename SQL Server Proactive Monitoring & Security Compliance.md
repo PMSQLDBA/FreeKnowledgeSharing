@@ -1,5 +1,6 @@
-For a comprehensive **SQL Server Proactive Monitoring & Security Compliance** solution:
-We can build automated audit reports covering Security, Configuration, Performance, Availability, Backup, Capacity, Compliance, and Operational Health.
+Comprehensive **SQL Server Proactive Monitoring & Security Compliance** solution:
+
+Automated audit reports covering Security, Configuration, Performance, Availability, Backup, Capacity, Compliance, and Operational Health.
 
 # 1. Security & Compliance Reports
 
