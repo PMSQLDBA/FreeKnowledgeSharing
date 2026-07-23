@@ -2,6 +2,20 @@ Source:
 
 https://www.linkedin.com/posts/erik-darling-data_sqlserver-dba-monitoring-share-7485695308400738304-_w-o/?utm_source=share&utm_medium=member_desktop&rcm=ACoAACKCDlIBwCyHwl-zdzyASa1BIP491KNZCLE
 
+SQL Server Performance Monitor v3.2.0 is out. This is the release where Darling grows up.
+
+Darling is the new flagship edition. 
+It's a free, headless monitoring service: install it once, point it at your fleet, and it collects around the clock into a bundled, managed Postgres/TimescaleDB store. 
+Nothing gets installed on your SQL Servers for its storage. It scales from 5 servers to 500.
+
+What you get:
+• A web dashboard and a desktop viewer
+• Custom Views you compose yourself, plus investigation notebooks
+• An MCP server your AI agent can drive: build views, tune alerts, and onboard whole fleets from a conversation
+• Connection-loss alerts, bulk server onboarding, and 9 new collectors shared across both editions
+
+Darling replaces the Full Dashboard as the flagship. Still free. Still open source. Your data never leaves your network.
+
 Github Repo: https://github.com/erikdarlingdata/PerformanceMonitor/releases/tag/v3.2.0
 Owner: Erik Darling
 
