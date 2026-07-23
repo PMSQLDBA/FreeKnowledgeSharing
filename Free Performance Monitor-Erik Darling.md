@@ -17,6 +17,7 @@ What you get:
 Darling replaces the Full Dashboard as the flagship. Still free. Still open source. Your data never leaves your network.
 
 Github Repo: https://github.com/erikdarlingdata/PerformanceMonitor/releases/tag/v3.2.0
+
 Owner: Erik Darling
 
 # What is Performance Monitor Darling?
