@@ -9,10 +9,15 @@ It's a free, headless monitoring service: install it once, point it at your flee
 Nothing gets installed on your SQL Servers for its storage. It scales from 5 servers to 500.
 
 What you get:
+
 • A web dashboard and a desktop viewer
+
 • Custom Views you compose yourself, plus investigation notebooks
+
 • An MCP server your AI agent can drive: build views, tune alerts, and onboard whole fleets from a conversation
+
 • Connection-loss alerts, bulk server onboarding, and 9 new collectors shared across both editions
+
 
 Darling replaces the Full Dashboard as the flagship. Still free. Still open source. Your data never leaves your network.
 
