@@ -145,6 +145,225 @@ ORDER BY wait_time_ms DESC;
 | `THREADPOOL` | Scenario 6 — Worker Thread Exhaustion |
 | `HADR_SYNC_COMMIT`, `HADR_DATABASE_FLOW_CONTROL` | Scenario 7 — AG / Log shipping latency |
 
+
+**Wait Type Analysis Report** that automatically maps SQL Server wait types to likely scenarios and recommended actions.
+
+The following query is designed for DBA health checks. It:
+
+* Captures current wait statistics
+* Calculates percentage contribution
+* Categorizes waits
+* Provides recommendations
+* Highlights investigation areas
+
+```sql
+/*
+==========================================================
+SQL Server Wait Statistics Analysis Report
+Purpose : Identify top waits and recommended DBA actions
+Version : SQL Server 2016+
+==========================================================
+*/
+
+;WITH WaitStats AS
+(
+    SELECT TOP 50
+        wait_type,
+        waiting_tasks_count,
+        wait_time_ms,
+        signal_wait_time_ms,
+        wait_time_ms - signal_wait_time_ms AS resource_wait_ms,
+        CAST(wait_time_ms / 1000.0 AS DECIMAL(18,2)) AS total_wait_sec,
+        CAST(signal_wait_time_ms / 1000.0 AS DECIMAL(18,2)) AS signal_wait_sec,
+        CAST(
+            100.0 * wait_time_ms / SUM(wait_time_ms) OVER()
+            AS DECIMAL(10,2)
+        ) AS wait_percentage
+    FROM sys.dm_os_wait_stats
+    WHERE wait_type NOT IN
+    (
+        'SLEEP_TASK',
+        'BROKER_TO_FLUSH',
+        'BROKER_TASK_STOP',
+        'CLR_AUTO_EVENT',
+        'DISPATCHER_QUEUE_SEMAPHORE',
+        'FT_IFTS_SCHEDULER_IDLE_WAIT',
+        'HADR_FILESTREAM_IOMGR_IOCOMPLETION',
+        'HADR_WORK_QUEUE',
+        'ONDEMAND_TASK_QUEUE',
+        'REQUEST_FOR_DEADLOCK_SEARCH',
+        'RESOURCE_QUEUE',
+        'SERVER_IDLE_CHECK',
+        'SLEEP_DBSTARTUP',
+        'SLEEP_DCOMSTARTUP',
+        'SLEEP_MASTERDBREADY',
+        'SLEEP_MASTERMDREADY',
+        'SLEEP_MASTERUPGRADED',
+        'SLEEP_MSDBSTARTUP',
+        'SLEEP_SYSTEMTASK',
+        'SLEEP_TEMPDBSTARTUP',
+        'SNI_HTTP_ACCEPT',
+        'SP_SERVER_DIAGNOSTICS_SLEEP',
+        'SQLTRACE_BUFFER_FLUSH',
+        'SQLTRACE_INCREMENTAL_FLUSH_SLEEP',
+        'WAITFOR',
+        'XE_DISPATCHER_WAIT',
+        'XE_TIMER_EVENT',
+        'CHECKPOINT_QUEUE'
+    )
+)
+SELECT
+    ws.wait_type,
+    ws.waiting_tasks_count,
+    ws.total_wait_sec,
+    ws.signal_wait_sec,
+    ws.wait_percentage,
+
+    CASE
+        WHEN wait_type LIKE 'SOS_SCHEDULER_YIELD%'
+          OR wait_type LIKE 'CXPACKET%'
+          OR wait_type LIKE 'CXCONSUMER%'
+        THEN 'CPU / Parallelism'
+
+        WHEN wait_type LIKE 'PAGEIOLATCH%'
+          OR wait_type LIKE 'IO_COMPLETION%'
+          OR wait_type LIKE 'WRITELOG%'
+          OR wait_type LIKE 'ASYNC_IO_COMPLETION%'
+        THEN 'Storage / I/O Pressure'
+
+        WHEN wait_type LIKE 'RESOURCE_SEMAPHORE%'
+        THEN 'Memory Pressure'
+
+        WHEN wait_type LIKE 'LCK_M_%'
+        THEN 'Blocking / Locking'
+
+        WHEN wait_type LIKE 'ASYNC_NETWORK_IO%'
+        THEN 'Application / Network'
+
+        WHEN wait_type LIKE 'THREADPOOL%'
+        THEN 'Worker Thread Exhaustion'
+
+        WHEN wait_type LIKE 'HADR_%'
+        THEN 'Always On Availability Group'
+
+        ELSE 'Other'
+    END AS Scenario,
+
+
+    CASE
+
+        WHEN wait_type LIKE 'SOS_SCHEDULER_YIELD%'
+        THEN
+        'CPU pressure. Check high CPU queries, missing indexes, parallelism settings, MAXDOP and Cost Threshold for Parallelism.'
+
+        WHEN wait_type LIKE 'CXPACKET%'
+        THEN
+        'Parallel query imbalance. Review MAXDOP, Cost Threshold, execution plans and skewed workloads.'
+
+        WHEN wait_type LIKE 'CXCONSUMER%'
+        THEN
+        'Normal parallelism coordination wait. Investigate only if combined with high CPU or CXPACKET.'
+
+        WHEN wait_type LIKE 'PAGEIOLATCH%'
+        THEN
+        'Data file read latency. Check storage latency, buffer cache pressure, missing indexes and large scans.'
+
+        WHEN wait_type LIKE 'WRITELOG%'
+        THEN
+        'Transaction log write latency. Check log disk latency, VLF count, autogrowth settings and excessive transactions.'
+
+        WHEN wait_type LIKE 'IO_COMPLETION%'
+        THEN
+        'General I/O bottleneck. Review storage subsystem, disk latency and workload patterns.'
+
+        WHEN wait_type LIKE 'RESOURCE_SEMAPHORE%'
+        THEN
+        'Memory grant pressure. Check large queries, missing indexes, excessive sorting/hash operations and max server memory.'
+
+        WHEN wait_type LIKE 'RESOURCE_SEMAPHORE_QUERY_COMPILE%'
+        THEN
+        'Compilation memory pressure. Review plan cache, ad-hoc workloads and excessive recompilation.'
+
+        WHEN wait_type LIKE 'LCK_M_%'
+        THEN
+        'Blocking detected. Find blocking sessions, long transactions and isolation level issues.'
+
+        WHEN wait_type LIKE 'ASYNC_NETWORK_IO%'
+        THEN
+        'Client is consuming results slowly. Check application processing, network bandwidth and result set size.'
+
+        WHEN wait_type LIKE 'THREADPOOL%'
+        THEN
+        'Worker thread starvation. Check blocking chains, excessive parallelism and runaway queries.'
+
+        WHEN wait_type LIKE 'HADR_SYNC_COMMIT%'
+        THEN
+        'AG synchronous replica delay. Check secondary replica performance and network latency.'
+
+        WHEN wait_type LIKE 'HADR_DATABASE_FLOW_CONTROL%'
+        THEN
+        'AG data movement throttling. Check secondary redo performance and transaction log generation rate.'
+
+        ELSE
+        'Review workload-specific DMV data and execution plans.'
+
+    END AS Recommendation
+
+FROM WaitStats ws
+ORDER BY
+    ws.wait_time_ms DESC;
+```
+
+---
+
+## Recommended DBA Workflow
+
+### Step 1 — Capture baseline
+
+Before analysis:
+
+```sql
+DBCC SQLPERF('sys.dm_os_wait_stats', CLEAR);
+```
+
+Wait:
+
+```
+30-60 minutes during normal workload
+```
+
+Then execute the report.
+
+---
+
+## Scenario Mapping Quick Reference
+
+| Wait Type                  | Scenario          | Primary Checks                    |
+| -------------------------- | ----------------- | --------------------------------- |
+| SOS_SCHEDULER_YIELD        | CPU pressure      | High CPU queries, indexes, MAXDOP |
+| CXPACKET/CXCONSUMER        | Parallelism       | MAXDOP, cost threshold            |
+| PAGEIOLATCH_*              | Data reads        | Storage latency, scans, indexes   |
+| WRITELOG                   | Transaction log   | Log disk, VLF, transaction size   |
+| RESOURCE_SEMAPHORE         | Memory grants     | Query memory, bad plans           |
+| LCK_M_*                    | Blocking          | Blocking chain, long transactions |
+| ASYNC_NETWORK_IO           | Application       | Client processing                 |
+| THREADPOOL                 | Worker exhaustion | Blocking, too many connections    |
+| HADR_SYNC_COMMIT           | AG latency        | Secondary replica/network         |
+| HADR_DATABASE_FLOW_CONTROL | AG throughput     | Redo queue, log generation        |
+
+---
+
+One important improvement for production use: **wait statistics alone do not identify the root cause**. 
+They identify the symptom category. For each top wait, the next step should be a targeted DMV check:
+
+* CPU waits → `sys.dm_exec_query_stats`
+* I/O waits → `sys.dm_io_virtual_file_stats`
+* Blocking → `sys.dm_exec_requests` + `sys.dm_tran_locks`
+* Memory → `sys.dm_exec_query_memory_grants`
+* AG waits → `sys.dm_hadr_database_replica_states`
+
+Above query can be the first module of a complete SQL Server Health Check Framework.
+
 ### Step 3 — Check signal waits (CPU pressure indicator)
 
 ```sql
