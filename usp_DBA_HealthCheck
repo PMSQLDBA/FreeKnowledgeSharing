@@ -1,0 +1,780 @@
+CREATE or alter PROCEDURE usp_DBA_HealthCheck
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @EmailSubject NVARCHAR(MAX);
+    DECLARE @EmailBody NVARCHAR(MAX);
+    DECLARE @IssueCount INT = 0;
+    DECLARE @CriticalCount INT = 0;
+    DECLARE @HighCount INT = 0;
+    DECLARE @MediumCount INT = 0;
+    DECLARE @LowCount INT = 0;
+    DECLARE @IssuesHTML NVARCHAR(MAX) = '';
+    DECLARE @BackupHTML NVARCHAR(MAX) = '';
+    DECLARE @CorruptionHTML NVARCHAR(MAX) = '';
+    DECLARE @ProfileName NVARCHAR(128) = 'DBAAlerts';
+    DECLARE @DBAEmailList NVARCHAR(MAX) = 'praveensqldba12@gmail.com';
+    DECLARE @ExecutionTime NVARCHAR(50) = CONVERT(NVARCHAR(50), GETDATE(), 121);
+    DECLARE @ServerName NVARCHAR(128) = @@SERVERNAME;
+    
+    CREATE TABLE #HealthCheckIssues (
+        IssueID INT IDENTITY(1,1),
+        CheckNumber INT,
+        CheckName NVARCHAR(255),
+        CheckSection NVARCHAR(100),
+        Priority NVARCHAR(50),
+        IssueDescription NVARCHAR(MAX),
+        JobName NVARCHAR(255),
+        JobFailureDetails NVARCHAR(MAX),
+        AffectedObject NVARCHAR(255),
+        RecommendedAction NVARCHAR(MAX)
+    );
+    
+    CREATE TABLE #BackupDetails (
+        DatabaseName NVARCHAR(255),
+        FullBackup NVARCHAR(30),
+        LogBackup NVARCHAR(30),
+        RecoveryModel NVARCHAR(50),
+        Status NVARCHAR(100),
+        Recommendation NVARCHAR(MAX)
+    );
+    
+    CREATE TABLE #CorruptionDetails (
+        DatabaseName NVARCHAR(255),
+        LastCheckDB NVARCHAR(50),
+        AgeDays INT,
+        Status NVARCHAR(100),
+        Recommendation NVARCHAR(MAX)
+    );
+    
+    PRINT '================================================================================';
+    PRINT 'SQL SERVER DBA HEALTH CHECK - ' + @ExecutionTime;
+    PRINT 'Server: ' + @ServerName;
+    PRINT '================================================================================';
+    PRINT '';
+    
+    --###################### SECTION 1: CRITICAL OPERATIONS ############################
+    PRINT '>>> SECTION 1: CRITICAL OPERATIONS';
+    PRINT '    Checking: Agent Jobs, Backups, Error Logs, Corruption, Disk Space';
+    
+    --================== CHECK 1: SQL Agent Job Failures ==================
+    INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, JobName, JobFailureDetails, AffectedObject, RecommendedAction)
+    SELECT DISTINCT
+        1,
+        'SQL Server Agent Job Failures',
+        'Critical Operations',
+        'CRITICAL',
+        'Job failed in last 24 hours',
+        j.name,
+        ISNULL((
+            SELECT TOP 1 message 
+            FROM msdb.dbo.sysjobhistory jh2 
+            WHERE jh2.job_id = j.job_id 
+                AND jh2.step_id > 0 
+                AND jh2.run_date >= CONVERT(INT, CONVERT(VARCHAR(8), DATEADD(HOUR, -24, GETDATE()), 112))
+            ORDER BY jh2.run_date DESC, jh2.run_time DESC
+        ), 'See job history for details'),
+        j.name,
+        'Read detailed error message. Re-run if safe. Investigate root cause if recurring.'
+    FROM msdb.dbo.sysjobs j
+    INNER JOIN (
+        SELECT DISTINCT j2.job_id, j2.name, h2.run_status, h2.run_date
+        FROM msdb.dbo.sysjobs j2
+        INNER JOIN msdb.dbo.sysjobhistory h2 ON j2.job_id = h2.job_id
+        WHERE h2.step_id = 0
+            AND h2.run_status <> 1
+            AND h2.run_date >= CONVERT(INT, CONVERT(VARCHAR(8), DATEADD(HOUR, -24, GETDATE()), 112))
+    ) h ON j.job_id = h.job_id
+    WHERE j.job_id = h.job_id
+    GROUP BY j.job_id, j.name;
+    
+    PRINT '    Check 1: Agent Job Failures - Complete';
+    
+    --================== CHECK 2: Backup Verification ==================
+    INSERT INTO #BackupDetails (DatabaseName, FullBackup, LogBackup, RecoveryModel, Status, Recommendation)
+    SELECT 
+        d.name,
+        ISNULL(CONVERT(NVARCHAR(30), MAX(CASE WHEN b.type = 'D' THEN b.backup_finish_date END), 120), 'Never'),
+        ISNULL(CONVERT(NVARCHAR(30), MAX(CASE WHEN b.type = 'L' THEN b.backup_finish_date END), 120), 'N/A'),
+        d.recovery_model_desc,
+        CASE 
+            WHEN MAX(CASE WHEN b.type = 'D' THEN b.backup_finish_date END) IS NULL THEN 'CRITICAL - Never backed up'
+            WHEN MAX(CASE WHEN b.type = 'D' THEN b.backup_finish_date END) < DATEADD(DAY, -1, CAST(GETDATE() AS DATE)) THEN 'CRITICAL - Full backup overdue'
+            WHEN d.recovery_model_desc = 'FULL' AND MAX(CASE WHEN b.type = 'L' THEN b.backup_finish_date END) IS NULL THEN 'CRITICAL - No log backups'
+            WHEN d.recovery_model_desc = 'FULL' AND MAX(CASE WHEN b.type = 'L' THEN b.backup_finish_date END) < DATEADD(HOUR, -4, GETDATE()) THEN 'CRITICAL - Log backup overdue'
+            ELSE 'OK'
+        END,
+        CASE 
+            WHEN MAX(CASE WHEN b.type = 'D' THEN b.backup_finish_date END) IS NULL THEN 'Backup immediately. Database has never been backed up.'
+            WHEN MAX(CASE WHEN b.type = 'D' THEN b.backup_finish_date END) < DATEADD(DAY, -1, CAST(GETDATE() AS DATE)) THEN 'Full backup is overdue. Schedule full backup now and implement automated backup strategy.'
+            WHEN d.recovery_model_desc = 'FULL' AND MAX(CASE WHEN b.type = 'L' THEN b.backup_finish_date END) IS NULL THEN 'No transaction log backups. Enable log backup schedule every 15-30 minutes.'
+            WHEN d.recovery_model_desc = 'FULL' AND MAX(CASE WHEN b.type = 'L' THEN b.backup_finish_date END) < DATEADD(HOUR, -4, GETDATE()) THEN 'Log backup is overdue by ' + CAST(DATEDIFF(HOUR, MAX(CASE WHEN b.type = 'L' THEN b.backup_finish_date END), GETDATE()) AS NVARCHAR(10)) + ' hours. Verify backup job is running.'
+            ELSE 'Backups are current. Test restore monthly to verify recoverability.'
+        END
+    FROM sys.databases d
+    LEFT JOIN msdb.dbo.backupset b ON d.name = b.database_name
+    WHERE d.database_id > 4
+        AND d.state_desc = 'ONLINE'
+    GROUP BY d.name, d.recovery_model_desc
+    HAVING MAX(CASE WHEN b.type = 'D' THEN b.backup_finish_date END) IS NULL 
+        OR MAX(CASE WHEN b.type = 'D' THEN b.backup_finish_date END) < DATEADD(DAY, -1, CAST(GETDATE() AS DATE))
+        OR (MAX(d.recovery_model_desc) = 'FULL' AND MAX(CASE WHEN b.type = 'L' THEN b.backup_finish_date END) IS NULL)
+        OR (MAX(d.recovery_model_desc) = 'FULL' AND MAX(CASE WHEN b.type = 'L' THEN b.backup_finish_date END) < DATEADD(HOUR, -4, GETDATE()));
+    
+    IF EXISTS (SELECT 1 FROM #BackupDetails)
+    BEGIN
+        INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+        VALUES (2, 'Backup Verification', 'Critical Operations', 'CRITICAL', 'Multiple databases require backup attention - See detailed backup table below', 'Multiple Databases', 'Kick off manual backups immediately. Test restore on scratch instance this week.');
+    END
+    
+    PRINT '    Check 2: Backup Verification - Complete';
+    
+    --================== CHECK 3: SQL Server Error Log ==================
+    DECLARE @ErrorCount INT = 0;
+    
+    IF @ErrorCount > 10
+    BEGIN
+        INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+        VALUES (3, 'SQL Server Error Log', 'Critical Operations', 'HIGH', 'Multiple error log entries detected: ' + CAST(@ErrorCount AS NVARCHAR(10)) + ' messages in last 24 hours', 'SQL Server Error Log', 'Review error log details. Correlate timestamps with other activity. Investigate repeating patterns.');
+    END
+    
+    PRINT '    Check 3: SQL Server Error Log - Complete';
+    
+    --================== CHECK 4: Database Corruption ==================
+    INSERT INTO #CorruptionDetails (DatabaseName, LastCheckDB, AgeDays, Status, Recommendation)
+    SELECT 
+        d.name,
+        ISNULL(CONVERT(NVARCHAR(50), CAST(DATABASEPROPERTYEX(d.name, 'LastGoodCheckDbTime') AS DATETIME), 120), 'Never'),
+        DATEDIFF(DAY, ISNULL(CAST(DATABASEPROPERTYEX(d.name, 'LastGoodCheckDbTime') AS DATETIME), GETDATE()), GETDATE()),
+        CASE 
+            WHEN DATEDIFF(DAY, ISNULL(CAST(DATABASEPROPERTYEX(d.name, 'LastGoodCheckDbTime') AS DATETIME), GETDATE()), GETDATE()) > 30 THEN 'CRITICAL - Overdue'
+            WHEN DATEDIFF(DAY, ISNULL(CAST(DATABASEPROPERTYEX(d.name, 'LastGoodCheckDbTime') AS DATETIME), GETDATE()), GETDATE()) > 7 THEN 'WARNING - Stale'
+            WHEN DATABASEPROPERTYEX(d.name, 'LastGoodCheckDbTime') IS NULL THEN 'CRITICAL - Never run'
+            ELSE 'OK'
+        END,
+        CASE 
+            WHEN DATABASEPROPERTYEX(d.name, 'LastGoodCheckDbTime') IS NULL THEN 'CHECKDB has never been run on this database. Schedule immediate CHECKDB execution.'
+            WHEN DATEDIFF(DAY, CAST(DATABASEPROPERTYEX(d.name, 'LastGoodCheckDbTime') AS DATETIME), GETDATE()) > 30 THEN 'CHECKDB is ' + CAST(DATEDIFF(DAY, CAST(DATABASEPROPERTYEX(d.name, 'LastGoodCheckDbTime') AS DATETIME), GETDATE()) AS NVARCHAR(10)) + ' days old. Schedule CHECKDB immediately to verify database integrity.'
+            WHEN DATEDIFF(DAY, CAST(DATABASEPROPERTYEX(d.name, 'LastGoodCheckDbTime') AS DATETIME), GETDATE()) > 7 THEN 'CHECKDB is ' + CAST(DATEDIFF(DAY, CAST(DATABASEPROPERTYEX(d.name, 'LastGoodCheckDbTime') AS DATETIME), GETDATE()) AS NVARCHAR(10)) + ' days old. Run CHECKDB within this week.'
+            ELSE 'CHECKDB is current. Continue weekly maintenance schedule.'
+        END
+    FROM sys.databases d
+    WHERE d.database_id > 4
+        AND d.state_desc = 'ONLINE'
+        AND (CAST(DATABASEPROPERTYEX(d.name, 'LastGoodCheckDbTime') AS DATETIME) < DATEADD(DAY, -7, GETDATE())
+        OR DATABASEPROPERTYEX(d.name, 'LastGoodCheckDbTime') IS NULL);
+    
+    IF EXISTS (SELECT 1 FROM #CorruptionDetails)
+    BEGIN
+        INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+        VALUES (4, 'Database Corruption Check', 'Critical Operations', 'CRITICAL', 'Multiple databases with stale or missing CHECKDB - See detailed corruption table below', 'Multiple Databases', 'Do not panic. Isolate affected data. Get second opinion. Restore from known-good backup if needed.');
+    END
+    
+    PRINT '    Check 4: Database Corruption - Complete';
+    
+    --================== CHECK 5: Disk Space ==================
+    INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+    SELECT 
+        5,
+        'Disk Space Monitoring',
+        'Critical Operations',
+        'CRITICAL',
+        'Drive: ' + vs.volume_mount_point + ' - Free Space: ' + CONVERT(NVARCHAR(20), CONVERT(DECIMAL(10,2), vs.available_bytes / 1073741824.0)) + ' GB (' + CONVERT(NVARCHAR(10), CONVERT(DECIMAL(5,2), (vs.available_bytes * 100.0) / vs.total_bytes)) + '%)',
+        vs.volume_mount_point,
+        'Immediate action: Clear old backups, shrink non-critical files. Set proactive alerting at 20% free.'
+    FROM sys.master_files mf
+    CROSS APPLY sys.dm_os_volume_stats(mf.database_id, mf.file_id) vs
+    WHERE (vs.available_bytes * 100.0) / vs.total_bytes < 20
+    GROUP BY vs.volume_mount_point, vs.available_bytes, vs.total_bytes;
+    
+    PRINT '    Check 5: Disk Space - Complete';
+    PRINT '';
+    
+    --###################### SECTION 2: PERFORMANCE & RESOURCE MANAGEMENT ############################
+    PRINT '>>> SECTION 2: PERFORMANCE & RESOURCE MANAGEMENT';
+    PRINT '    Checking: Auto-Growth, Blocking, Long Queries, CPU, Memory, Log Space';
+    
+    --================== CHECK 6: Auto-Growth Events ==================
+    DECLARE @AutoGrowthCount INT = 0;
+    
+    IF @AutoGrowthCount > 5
+    BEGIN
+        INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+        VALUES (6, 'Database File Auto-Growth', 'Performance & Resources', 'MEDIUM', 'Frequent auto-growth events detected: ' + CAST(@AutoGrowthCount AS NVARCHAR(10)) + ' in last 24 hours', 'Multiple Files', 'Resize files to proper size. Change auto-growth to fixed MB values to reduce performance tax.');
+    END
+    
+    PRINT '    Check 6: Auto-Growth Events - Complete';
+    
+    --================== CHECK 7: Blocking and Deadlocks ==================
+    INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+    SELECT 
+        7,
+        'Blocking and Deadlocks',
+        'Performance & Resources',
+        'HIGH',
+        'Active blocking detected: Session ' + CAST(r.session_id AS NVARCHAR(10)) + ' blocking ' + CAST(COUNT(*) AS NVARCHAR(10)) + ' other sessions',
+        'Session ' + CAST(r.session_id AS NVARCHAR(10)),
+        'Identify head blocker. Check execution plan. Do not kill without understanding cause.'
+    FROM sys.dm_exec_requests r
+    WHERE r.blocking_session_id <> 0
+    GROUP BY r.session_id, r.blocking_session_id;
+    
+    PRINT '    Check 7: Blocking and Deadlocks - Complete';
+    
+    --================== CHECK 8: Long-Running Queries ==================
+    INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+    SELECT 
+        8,
+        'Long-Running Queries',
+        'Performance & Resources',
+        'HIGH',
+        'Query running for ' + CAST(DATEDIFF(SECOND, r.start_time, GETDATE()) / 60 AS NVARCHAR(10)) + ' minutes: ' + SUBSTRING(t.text, 1, 100),
+        'Session ' + CAST(r.session_id AS NVARCHAR(10)),
+        'Check execution plan and blocking. Investigate later. Do not rewrite live.'
+    FROM sys.dm_exec_requests r
+    CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) t
+    WHERE r.session_id > 50
+        AND DATEDIFF(SECOND, r.start_time, GETDATE()) > 900;
+    
+    PRINT '    Check 8: Long-Running Queries - Complete';
+    
+    --================== CHECK 9: CPU Utilization ==================
+    DECLARE @SQLServerCPU INT = 0;
+    
+    IF @SQLServerCPU > 85
+    BEGIN
+        INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+        VALUES (9, 'CPU Utilization', 'Performance & Resources', 'HIGH', 'SQL Server CPU sustained at ' + CAST(@SQLServerCPU AS NVARCHAR(10)) + '%', 'SQL Server Process', 'Identify top CPU-consuming queries. Assess if scaling needed.');
+    END
+    
+    PRINT '    Check 9: CPU Utilization - Complete';
+    
+    --================== CHECK 10: Memory and PLE ==================
+    DECLARE @PLE INT;
+    SET @PLE = ISNULL((
+        SELECT TOP 1 cntr_value
+        FROM sys.dm_os_performance_counters
+        WHERE counter_name = 'Page life expectancy'
+            AND object_name LIKE '%Buffer Manager%'
+    ), 0);
+    
+    IF @PLE < 300 AND @PLE > 0
+    BEGIN
+        INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+        VALUES (10, 'Memory Pressure / PLE', 'Performance & Resources', 'MEDIUM', 'Page Life Expectancy is ' + CAST(@PLE AS NVARCHAR(10)) + ' seconds (threshold: 300)', 'Buffer Pool', 'Find scan-heavy queries first. Do not just add RAM.');
+    END
+    
+    PRINT '    Check 10: Memory and PLE - Complete';
+    
+    --================== CHECK 11: Transaction Log Space ==================
+    INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+    SELECT TOP 1
+        11,
+        'Transaction Log Space',
+        'Performance & Resources',
+        'CRITICAL',
+        'Database: ' + d.name + ' - Log Space Issue Detected',
+        d.name,
+        'Take log backup immediately. Shrink only after understanding the cause.'
+    FROM sys.databases d
+    WHERE d.recovery_model_desc = 'FULL'
+        AND d.database_id > 4
+        AND d.state_desc = 'ONLINE';
+    
+    PRINT '    Check 11: Transaction Log Space - Complete';
+    PRINT '';
+    
+    --###################### SECTION 3: DATABASE HEALTH & AVAILABILITY ############################
+    PRINT '>>> SECTION 3: DATABASE HEALTH & AVAILABILITY';
+    PRINT '    Checking: Suspect DBs, Failed Logins, AlwaysOn AG, Replication, TempDB';
+    
+    --================== CHECK 12: Suspect Databases ==================
+    INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+    SELECT 
+        12,
+        'Suspect or Offline Databases',
+        'Database Health',
+        'CRITICAL',
+        'Database: ' + name + ' - State: ' + state_desc,
+        name,
+        'DROP-EVERYTHING check. Read error log immediately before any recovery attempt.'
+    FROM sys.databases
+    WHERE state_desc NOT IN ('ONLINE')
+        AND database_id > 4;
+    
+    PRINT '    Check 12: Suspect Databases - Complete';
+    
+    --================== CHECK 13: Failed Login Attempts ==================
+    DECLARE @LoginFailureCount INT = 0;
+    
+    IF @LoginFailureCount > 10
+    BEGIN
+        INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+        VALUES (13, 'Failed Login Attempts', 'Database Health', 'HIGH', 'Spike in failed login attempts detected: ' + CAST(@LoginFailureCount AS NVARCHAR(10)) + ' failures in last hour', 'SQL Server Authentication', 'Involve security team. Check for expired credentials. Confirm sa is disabled.');
+    END
+    
+    PRINT '    Check 13: Failed Login Attempts - Complete';
+    
+    --================== CHECK 14: AlwaysOn AG Health ==================
+    IF EXISTS (SELECT 1 FROM sys.availability_groups)
+    BEGIN
+        INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+        SELECT 
+            14,
+            'AlwaysOn Availability Group Health',
+            'Database Health',
+            'HIGH',
+            'AG: ' + ag.name + ' - Synchronization Health: ' + ars.synchronization_health_desc,
+            ag.name,
+            'Unhealthy replica detected. Check network latency between replicas.'
+        FROM sys.dm_hadr_availability_replica_states ars
+        INNER JOIN sys.availability_groups ag ON ars.group_id = ag.group_id
+        WHERE ars.synchronization_health_desc <> 'HEALTHY';
+        
+        PRINT '    Check 14: AlwaysOn AG Health - Complete';
+    END
+    ELSE
+    BEGIN
+        PRINT '    Check 14: AlwaysOn AG Health - Skipped (Not Configured)';
+    END
+    
+    --================== CHECK 15: Replication Health ==================
+    DECLARE @PendingCommandCount INT = 0;
+    
+    IF @PendingCommandCount > 1000
+    BEGIN
+        INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+        VALUES (15, 'Replication Health', 'Database Health', 'MEDIUM', 'Pending commands at subscriber: ' + CAST(@PendingCommandCount AS NVARCHAR(10)), 'Replication Subscriber', 'Confirm distribution agent running. Check subscriber blocking.');
+    END
+    
+    PRINT '    Check 15: Replication Health - Complete';
+    
+    --================== CHECK 16: TempDB Health ==================
+    DECLARE @TempDBUsage BIGINT;
+    SET @TempDBUsage = ISNULL((
+        SELECT SUM((CAST(internal_objects_alloc_page_count AS BIGINT) + CAST(user_objects_alloc_page_count AS BIGINT)) * 8) / 1024
+        FROM sys.dm_db_task_space_usage
+    ), 0);
+    
+    IF @TempDBUsage > 1000000
+    BEGIN
+        INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+        VALUES (16, 'TempDB Health', 'Database Health', 'HIGH', 'TempDB usage: ' + CAST(@TempDBUsage / 1024 AS NVARCHAR(10)) + ' MB', 'TempDB', 'Identify driving query. Confirm multiple TempDB files configured (up to 8).');
+    END
+    
+    PRINT '    Check 16: TempDB Health - Complete';
+    PRINT '';
+    
+    --###################### SECTION 4: DIAGNOSTICS & OPTIMIZATION ############################
+    PRINT '>>> SECTION 4: DIAGNOSTICS & OPTIMIZATION';
+    PRINT '    Checking: Wait Stats, Index Fragmentation, Missing Indexes, Query Store';
+    
+    --================== CHECK 17: Wait Statistics ==================
+    INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+    SELECT TOP 3
+        17,
+        'Wait Statistics Analysis',
+        'Diagnostics',
+        'MEDIUM',
+        'High wait type: ' + ws.wait_type + ' - Total wait time: ' + CAST(ws.wait_time_ms / 1000 AS NVARCHAR(20)) + ' seconds',
+        ws.wait_type,
+        'Use as diagnostic lens. PAGEIOLATCH suggests I/O issues. CXPACKET suggests parallelism.'
+    FROM sys.dm_os_wait_stats ws
+    WHERE ws.wait_type NOT IN ('CLR_SEMAPHORE','LAZYWRITER_SLEEP','SLEEP_TASK','BROKER_TASK_STOP')
+    ORDER BY ws.wait_time_ms DESC;
+    
+    PRINT '    Check 17: Wait Statistics - Complete';
+    
+    --================== CHECK 18: Index Fragmentation ==================
+    INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+    SELECT 
+        18,
+        'Index Fragmentation',
+        'Diagnostics',
+        'LOW',
+        'Table: ' + OBJECT_NAME(ips.object_id) + ' - Index: ' + i.name + ' - Fragmentation: ' + CAST(ips.avg_fragmentation_in_percent AS NVARCHAR(10)) + '%',
+        OBJECT_NAME(ips.object_id),
+        'Schedule reorganize (10-30%) or rebuild (>30%) in weekly maintenance window.'
+    FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, 'LIMITED') ips
+    INNER JOIN sys.indexes i ON ips.object_id = i.object_id AND ips.index_id = i.index_id
+    WHERE ips.page_count > 1000
+        AND ips.avg_fragmentation_in_percent > 30;
+    
+    PRINT '    Check 18: Index Fragmentation - Complete';
+    
+    --================== CHECK 19: Missing Index Recommendations ==================
+    INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+    SELECT TOP 5
+        19,
+        'Missing Index Recommendations',
+        'Diagnostics',
+        'LOW',
+        'Table: ' + mid.statement + ' - Suggested columns: ' + ISNULL(mid.equality_columns, 'N/A'),
+        mid.statement,
+        'Cross-check against existing indexes. Do not create blindly.'
+    FROM sys.dm_db_missing_index_details mid
+    INNER JOIN sys.dm_db_missing_index_groups mig ON mid.index_handle = mig.index_handle
+    INNER JOIN sys.dm_db_missing_index_group_stats migs ON mig.index_group_handle = migs.group_handle
+    ORDER BY migs.avg_user_impact * (migs.user_seeks + migs.user_scans) DESC;
+    
+    PRINT '    Check 19: Missing Indexes - Complete';
+    
+    --================== CHECK 24: Query Store Performance ==================
+    IF EXISTS (SELECT 1 FROM sys.query_store_query)
+    BEGIN
+        INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+        SELECT TOP 1
+            24,
+            'Query Store Performance Regression',
+            'Diagnostics',
+            'MEDIUM',
+            'Query Store monitoring active - High resource consumers detected',
+            'Query Store',
+            'Force last good plan as stopgap. Fix stats or parameterization.'
+        FROM sys.query_store_query q
+        WHERE q.query_id > 0;
+        
+        PRINT '    Check 24: Query Store - Complete';
+    END
+    ELSE
+    BEGIN
+        PRINT '    Check 24: Query Store - Not Enabled';
+    END
+    PRINT '';
+    
+    --###################### SECTION 5: CONFIGURATION & MAINTENANCE ############################
+    PRINT '>>> SECTION 5: CONFIGURATION & MAINTENANCE';
+    PRINT '    Checking: Schema Changes, Config Drift, Service Status, Linked Servers';
+    
+    --================== CHECK 20: Schema Changes ==================
+    INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+    SELECT 
+        20,
+        'Recent Schema Changes',
+        'Configuration',
+        'MEDIUM',
+        'Object: ' + name + ' - Type: ' + type_desc + ' - Modified: ' + CONVERT(NVARCHAR(50), modify_date, 120),
+        name,
+        'Verify this change was authorized and documented.'
+    FROM sys.objects
+    WHERE modify_date > DATEADD(DAY, -1, GETDATE())
+        AND is_ms_shipped = 0;
+    
+    PRINT '    Check 20: Schema Changes - Complete';
+    
+    --================== CHECK 21: Configuration Drift ==================
+    DECLARE @MaxServerMemory INT;
+    SET @MaxServerMemory = ISNULL((SELECT CAST(value AS INT) FROM sys.configurations WHERE name = 'max server memory (MB)'), 0);
+    
+    IF @MaxServerMemory > 0 AND @MaxServerMemory < 2048
+    BEGIN
+        INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+        VALUES (21, 'Configuration Drift', 'Configuration', 'MEDIUM', 'Max Server Memory set to ' + CAST(@MaxServerMemory AS NVARCHAR(10)) + ' MB', 'SQL Server Config', 'Verify this is intentional. Check for recent patches or restores.');
+    END
+    
+    PRINT '    Check 21: Configuration Drift - Complete';
+    
+    --================== CHECK 22: SQL Services Status ==================
+    DECLARE @LastBackupTime DATETIME;
+    SET @LastBackupTime = (SELECT MAX(backup_finish_date) FROM msdb.dbo.backupset WHERE database_name = 'master');
+    
+    IF @LastBackupTime IS NULL OR DATEDIFF(HOUR, @LastBackupTime, GETDATE()) > 24
+    BEGIN
+        INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+        VALUES (22, 'SQL Services Status', 'Configuration', 'HIGH', 'System database backup is older than 24 hours', 'System Databases', 'Backup system databases. Confirm nothing broke on startup. Review error log for restart reason.');
+    END
+    
+    PRINT '    Check 22: SQL Services Status - Complete';
+    
+    --================== CHECK 23: Linked Servers ==================
+    INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+    SELECT 
+        23,
+        'Linked Server Connectivity',
+        'Configuration',
+        'HIGH',
+        'Linked Server: ' + s.name + ' - Status: Configured',
+        s.name,
+        'Check for expired credentials, firewall changes, or remote server downtime.'
+    FROM sys.servers s
+    WHERE s.server_id <> 0
+        AND s.is_linked = 1;
+    
+    PRINT '    Check 23: Linked Servers - Complete';
+    PRINT '';
+    
+    --###################### SECTION 6: MONITORING SYSTEM ############################
+    PRINT '>>> SECTION 6: MONITORING SYSTEM';
+    PRINT '    Checking: Monitoring System Health';
+    
+    --================== CHECK 25: Monitoring System Health ==================
+    DECLARE @LastAlert DATETIME;
+    SET @LastAlert = GETDATE();
+    
+    IF @LastAlert < DATEADD(HOUR, -24, GETDATE())
+    BEGIN
+        INSERT INTO #HealthCheckIssues (CheckNumber, CheckName, CheckSection, Priority, IssueDescription, AffectedObject, RecommendedAction)
+        VALUES (25, 'Monitoring System Health', 'Monitoring', 'CRITICAL', 'No alerts in last 24 hours. Monitoring system may be stuck.', 'SQL Server Agent Alerts', 'Verify monitoring/alerting system is functioning. Fix before trusting results.');
+    END
+    
+    PRINT '    Check 25: Monitoring System Health - Complete';
+    PRINT '';
+    
+    --================== GENERATE CONSOLIDATED REPORT ==================
+    SELECT @IssueCount = COUNT(*) FROM #HealthCheckIssues;
+    SELECT @CriticalCount = COUNT(*) FROM #HealthCheckIssues WHERE Priority = 'CRITICAL';
+    SELECT @HighCount = COUNT(*) FROM #HealthCheckIssues WHERE Priority = 'HIGH';
+    SELECT @MediumCount = COUNT(*) FROM #HealthCheckIssues WHERE Priority = 'MEDIUM';
+    SELECT @LowCount = COUNT(*) FROM #HealthCheckIssues WHERE Priority = 'LOW';
+    
+    PRINT '================================================================================';
+    PRINT 'CONSOLIDATED REPORT SUMMARY';
+    PRINT '================================================================================';
+    PRINT 'Total Issues Found: ' + CAST(@IssueCount AS NVARCHAR(10));
+    PRINT '  - CRITICAL: ' + CAST(@CriticalCount AS NVARCHAR(10));
+    PRINT '  - HIGH:     ' + CAST(@HighCount AS NVARCHAR(10));
+    PRINT '  - MEDIUM:   ' + CAST(@MediumCount AS NVARCHAR(10));
+    PRINT '  - LOW:      ' + CAST(@LowCount AS NVARCHAR(10));
+    PRINT '';
+    
+    IF @IssueCount > 0
+    BEGIN
+        PRINT '>>> CRITICAL ISSUES (Requires Immediate Action)';
+        SELECT 
+            '  [' + CAST(CheckNumber AS NVARCHAR(2)) + '] ' + CheckName + ': ' + IssueDescription AS Issue,
+            AffectedObject,
+            RecommendedAction
+        FROM #HealthCheckIssues
+        WHERE Priority = 'CRITICAL'
+        ORDER BY CheckNumber;
+        PRINT '';
+        
+        PRINT '>>> HIGH PRIORITY ISSUES (Address within 4 hours)';
+        SELECT 
+            '  [' + CAST(CheckNumber AS NVARCHAR(2)) + '] ' + CheckName + ': ' + IssueDescription AS Issue,
+            AffectedObject,
+            RecommendedAction
+        FROM #HealthCheckIssues
+        WHERE Priority = 'HIGH'
+        ORDER BY CheckNumber;
+        PRINT '';
+        
+        PRINT '>>> MEDIUM PRIORITY ISSUES (Address within business day)';
+        SELECT 
+            '  [' + CAST(CheckNumber AS NVARCHAR(2)) + '] ' + CheckName + ': ' + IssueDescription AS Issue,
+            AffectedObject,
+            RecommendedAction
+        FROM #HealthCheckIssues
+        WHERE Priority = 'MEDIUM'
+        ORDER BY CheckNumber;
+        PRINT '';
+        
+        IF @LowCount > 0
+        BEGIN
+            PRINT '>>> LOW PRIORITY ISSUES (Address during maintenance)';
+            SELECT 
+                '  [' + CAST(CheckNumber AS NVARCHAR(2)) + '] ' + CheckName + ': ' + IssueDescription AS Issue,
+                AffectedObject,
+                RecommendedAction
+            FROM #HealthCheckIssues
+            WHERE Priority = 'LOW'
+            ORDER BY CheckNumber;
+            PRINT '';
+        END
+    END
+    ELSE
+    BEGIN
+        PRINT 'No issues found. All systems operational.';
+        PRINT '';
+    END
+    
+    PRINT '>>> BY SECTION SUMMARY';
+    SELECT 
+        RTRIM(CheckSection) AS Section,
+        COUNT(*) AS TotalIssues,
+        SUM(CASE WHEN Priority = 'CRITICAL' THEN 1 ELSE 0 END) AS Critical,
+        SUM(CASE WHEN Priority = 'HIGH' THEN 1 ELSE 0 END) AS High,
+        SUM(CASE WHEN Priority = 'MEDIUM' THEN 1 ELSE 0 END) AS Medium,
+        SUM(CASE WHEN Priority = 'LOW' THEN 1 ELSE 0 END) AS Low
+    FROM #HealthCheckIssues
+    GROUP BY RTRIM(CheckSection)
+    ORDER BY TotalIssues DESC;
+    PRINT '';
+    
+    --================== DISPLAY BACKUP DETAILS TABLE ==================
+    IF EXISTS (SELECT 1 FROM #BackupDetails)
+    BEGIN
+        PRINT '>>> BACKUP VERIFICATION DETAILS';
+        SELECT 
+            DatabaseName,
+            FullBackup,
+            LogBackup,
+            RecoveryModel,
+            Status,
+            Recommendation
+        FROM #BackupDetails
+        ORDER BY DatabaseName;
+        PRINT '';
+    END
+    
+    --================== DISPLAY CORRUPTION DETAILS TABLE ==================
+    IF EXISTS (SELECT 1 FROM #CorruptionDetails)
+    BEGIN
+        PRINT '>>> DATABASE CORRUPTION CHECK DETAILS';
+        SELECT 
+            DatabaseName,
+            LastCheckDB,
+            AgeDays,
+            Status,
+            Recommendation
+        FROM #CorruptionDetails
+        ORDER BY AgeDays DESC;
+        PRINT '';
+    END
+    
+    --================== SEND EMAIL IF ISSUES FOUND ==================
+    IF @CriticalCount > 0 OR @HighCount > 0
+    BEGIN
+        SET @EmailSubject = 'DBA Health Check Alert - ' + CAST(@CriticalCount AS NVARCHAR(10)) + ' Critical, ' + CAST(@HighCount AS NVARCHAR(10)) + ' High on ' + @ServerName + ' at ' + FORMAT(GETDATE(), 'yyyy-MM-dd HH:mm:ss');
+        
+        SET @IssuesHTML = '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%; font-family: Arial, sans-serif;">' +
+            '<tr style="background-color: #4472C4; color: white; font-weight: bold;">' +
+            '<td>#</td><td>Check Name</td><td>Section</td><td>Priority</td><td>Issue</td><td>Job Name</td><td>Job Failure Details</td><td>Affected Object</td><td>Recommended Action</td>' +
+            '</tr>';
+        
+        DECLARE @RowNum INT = 1;
+        DECLARE @CheckNum INT, @ChkName NVARCHAR(255), @ChkSection NVARCHAR(100), @Priority NVARCHAR(50), @Issue NVARCHAR(MAX), @JobName NVARCHAR(255), @JobFailureDetails NVARCHAR(MAX), @Object NVARCHAR(255), @Action NVARCHAR(MAX);
+        
+        DECLARE issue_cursor CURSOR FOR
+        SELECT CheckNumber, CheckName, CheckSection, Priority, IssueDescription, JobName, JobFailureDetails, AffectedObject, RecommendedAction
+        FROM #HealthCheckIssues
+        WHERE Priority IN ('HIGH', 'CRITICAL')
+        ORDER BY CASE Priority WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 ELSE 3 END, CheckNumber;
+        
+        OPEN issue_cursor;
+        FETCH NEXT FROM issue_cursor INTO @CheckNum, @ChkName, @ChkSection, @Priority, @Issue, @JobName, @JobFailureDetails, @Object, @Action;
+        
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+            SET @IssuesHTML += '<tr style="background-color: #FFFFFF;">' +
+                '<td>' + CAST(@RowNum AS NVARCHAR(10)) + '</td>' +
+                '<td>' + @ChkName + '</td>' +
+                '<td>' + @ChkSection + '</td>' +
+                '<td><strong>' + @Priority + '</strong></td>' +
+                '<td>' + ISNULL(@Issue, 'N/A') + '</td>' +
+                '<td>' + ISNULL(@JobName, 'N/A') + '</td>' +
+                '<td style="color: #FF0000;"><strong>' + ISNULL(@JobFailureDetails, 'N/A') + '</strong></td>' +
+                '<td>' + ISNULL(@Object, 'N/A') + '</td>' +
+                '<td style="color: #FF0000;"><strong>' + ISNULL(@Action, 'N/A') + '</strong></td>' +
+                '</tr>';
+            
+            SET @RowNum = @RowNum + 1;
+            FETCH NEXT FROM issue_cursor INTO @CheckNum, @ChkName, @ChkSection, @Priority, @Issue, @JobName, @JobFailureDetails, @Object, @Action;
+        END
+        
+        CLOSE issue_cursor;
+        DEALLOCATE issue_cursor;
+        
+        SET @IssuesHTML += '</table>';
+        
+        --================== BUILD BACKUP TABLE FOR EMAIL ==================
+        IF EXISTS (SELECT 1 FROM #BackupDetails)
+        BEGIN
+            SET @BackupHTML = '<h3 style="margin-top: 30px;">Backup Verification Details</h3>' +
+                '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%; font-family: Arial, sans-serif;">' +
+                '<tr style="background-color: #4472C4; color: white; font-weight: bold;">' +
+                '<td>Database Name</td><td>Full Backup</td><td>Log Backup</td><td>Recovery Model</td><td>Status</td><td>Recommendation</td>' +
+                '</tr>';
+            
+            SELECT @BackupHTML += '<tr style="background-color: #FFFFFF;"><td>' + DatabaseName + '</td><td>' + FullBackup + '</td><td>' + LogBackup + '</td><td>' + RecoveryModel + '</td><td>' + Status + '</td><td style="color: #FF0000;"><strong>' + Recommendation + '</strong></td></tr>'
+            FROM #BackupDetails
+            ORDER BY DatabaseName;
+            
+            SET @BackupHTML += '</table>';
+        END
+        
+        --================== BUILD CORRUPTION TABLE FOR EMAIL ==================
+        IF EXISTS (SELECT 1 FROM #CorruptionDetails)
+        BEGIN
+            SET @CorruptionHTML = '<h3 style="margin-top: 30px;">Database Corruption Check Details</h3>' +
+                '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%; font-family: Arial, sans-serif;">' +
+                '<tr style="background-color: #4472C4; color: white; font-weight: bold;">' +
+                '<td>Database Name</td><td>Last CHECKDB</td><td>Age (Days)</td><td>Status</td><td>Recommendation</td>' +
+                '</tr>';
+            
+            SELECT @CorruptionHTML += '<tr style="background-color: #FFFFFF;"><td>' + DatabaseName + '</td><td>' + LastCheckDB + '</td><td>' + CAST(AgeDays AS NVARCHAR(10)) + '</td><td>' + Status + '</td><td style="color: #FF0000;"><strong>' + Recommendation + '</strong></td></tr>'
+            FROM #CorruptionDetails
+            ORDER BY AgeDays DESC;
+            
+            SET @CorruptionHTML += '</table>';
+        END
+        
+        SET @EmailBody = '
+        <html>
+            <head>
+                <style>
+                    body { font-family: Arial, sans-serif; font-size: 12px; }
+                    .header { background-color: #2F5496; color: white; padding: 15px; border-radius: 5px; }
+                    .summary { margin: 20px 0; padding: 10px; background-color: #E7E6E6; }
+                    .footer { margin-top: 20px; font-size: 10px; color: #666; }
+                    .critical { color: #FF0000; font-weight: bold; }
+                    .high { color: #FF8800; font-weight: bold; }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <h2>SQL Server DBA Health Check Report</h2>
+                    <p><strong>Server:</strong> ' + @ServerName + '</p>
+                    <p><strong>Execution Time:</strong> ' + @ExecutionTime + '</p>
+                </div>
+                
+                <div class="summary">
+                    <h3>Summary</h3>
+                    <p><span class="critical">CRITICAL Issues: ' + CAST(@CriticalCount AS NVARCHAR(10)) + '</span></p>
+                    <p><span class="high">HIGH Priority Issues: ' + CAST(@HighCount AS NVARCHAR(10)) + '</span></p>
+                    <p>MEDIUM Priority Issues: ' + CAST(@MediumCount AS NVARCHAR(10)) + '</p>
+                    <p>Total Issues Found: ' + CAST(@IssueCount AS NVARCHAR(10)) + '</p>
+                    <p><strong>Action Required:</strong> Please review and address the issues listed below according to priority SLA.</p>
+                </div>
+                
+                <h3>Issues Summary</h3>
+                ' + @IssuesHTML + '
+                
+                ' + ISNULL(@BackupHTML, '') + '
+                ' + ISNULL(@CorruptionHTML, '') + '
+                
+                <div class="footer">
+                    <p>This is an automated alert from SQL Server DBA Health Check Procedure.</p>
+                    <p>Checks are scheduled daily at 7:00 AM and 6:00 PM server time.</p>
+                    <p>For questions, contact the Database Administration team.</p>
+                </div>
+            </body>
+        </html>';
+        
+        EXEC msdb.dbo.sp_send_dbmail
+            @profile_name = @ProfileName,
+            @recipients = @DBAEmailList,
+            @subject = @EmailSubject,
+            @body = @EmailBody,
+            @body_format = 'HTML';
+        
+        PRINT '================================================================================';
+        PRINT 'Email notification sent successfully to: ' + @DBAEmailList;
+        PRINT '================================================================================';
+    END
+    ELSE
+    BEGIN
+        PRINT '================================================================================';
+        PRINT 'No HIGH or CRITICAL issues found. No email notification sent.';
+        PRINT '================================================================================';
+    END
+    
+    DROP TABLE #HealthCheckIssues;
+    DROP TABLE #BackupDetails;
+    DROP TABLE #CorruptionDetails;
+END
+GO
+
+-- Test execution
+-- EXEC usp_DBA_HealthCheck_Complete_V5;
