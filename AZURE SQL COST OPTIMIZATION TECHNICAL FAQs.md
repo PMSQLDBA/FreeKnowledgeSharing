@@ -1,7 +1,5 @@
 AZURE SQL COST OPTIMIZATION TECHNICAL FAQs
 
-Source: https://www.techmixing.com/2026/07/azure-sql-cost-optimization-interview-questions.html
-
 BEGINNER LEVEL
 
 Q1: What are the two main purchasing models for Azure SQL Database?
