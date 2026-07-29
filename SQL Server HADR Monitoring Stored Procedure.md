@@ -8,10 +8,15 @@ Log Shipping, Database Mirroring, Replication, and AlwaysOn Availability Groups.
 It delivers consolidated HTML email alerts when issues are detected.
 
 **Procedure Name:** `usp_HADR_HealthCHECK`
+
 **Drafted by:** Praveen Madupu
+
 **Version:** 1.0
+
 **Last Updated:** 29th July 2026 - Wednesday
+
 **Compatibility:** SQL Server 2016 and later
+
 **Status:** Production Ready
 
 [**Script**] (https://github.com/PMSQLDBA/FreeKnowledgeSharing/blob/main/usp_HADR_HealthCHECK)
