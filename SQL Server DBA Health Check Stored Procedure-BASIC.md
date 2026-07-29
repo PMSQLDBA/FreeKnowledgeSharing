@@ -249,6 +249,11 @@ Email notification sent successfully to: praveensqldba12@gmail.com
 
 ---
 
+<img width="1676" height="752" alt="image" src="https://github.com/user-attachments/assets/ada1d0f7-f3ae-409b-b49f-eaf569d0bd97" />
+
+<img width="1650" height="450" alt="image" src="https://github.com/user-attachments/assets/33e66dbd-ed22-4fca-8733-4bc152c58b4b" />
+
+
 ## Email Alert Format
 
 Emails are sent only when CRITICAL or HIGH priority issues are detected.
