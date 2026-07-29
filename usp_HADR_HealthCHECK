@@ -1,0 +1,353 @@
+CREATE or ALTER PROCEDURE usp_HADR_HealthCHECK
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @EmailSubject NVARCHAR(MAX);
+    DECLARE @EmailBody NVARCHAR(MAX);
+    DECLARE @ProfileName NVARCHAR(128) = 'DBAAlerts';
+    DECLARE @DBAEmailList NVARCHAR(MAX) = 'sqldbateam2026@gmail.com';
+    DECLARE @ExecutionTime NVARCHAR(50) = CONVERT(NVARCHAR(50), GETDATE(), 121);
+    DECLARE @ServerName NVARCHAR(128) = @@SERVERNAME;
+    
+    DECLARE @LogShippingIssueCount INT = 0;
+    DECLARE @MirroringIssueCount INT = 0;
+    DECLARE @ReplicationIssueCount INT = 0;
+    DECLARE @AlwaysOnIssueCount INT = 0;
+    DECLARE @TotalIssues INT = 0;
+    
+    DECLARE @LogShippingHTML NVARCHAR(MAX) = '';
+    DECLARE @MirroringHTML NVARCHAR(MAX) = '';
+    DECLARE @ReplicationHTML NVARCHAR(MAX) = '';
+    DECLARE @AlwaysOnHTML NVARCHAR(MAX) = '';
+    
+    CREATE TABLE #LogShippingDetails (
+        PrimaryDatabase NVARCHAR(255),
+        Status NVARCHAR(100),
+        AlertMessage NVARCHAR(MAX)
+    );
+    
+    CREATE TABLE #MirroringDetails (
+        DatabaseName NVARCHAR(255),
+        MirrorState NVARCHAR(100),
+        MirrorRole NVARCHAR(50),
+        PrincipalServer NVARCHAR(255),
+        MirrorServer NVARCHAR(255),
+        AlertMessage NVARCHAR(MAX)
+    );
+    
+    CREATE TABLE #ReplicationDetails (
+        SubscriberServer NVARCHAR(255),
+        SubscriptionDatabase NVARCHAR(255),
+        ReplicationStatus NVARCHAR(100),
+        AlertMessage NVARCHAR(MAX)
+    );
+    
+    CREATE TABLE #AlwaysOnDetails (
+        AvailabilityGroupName NVARCHAR(255),
+        ReplicaName NVARCHAR(255),
+        ReplicaRole NVARCHAR(50),
+        ConnectedState NVARCHAR(50),
+        SyncHealth NVARCHAR(100),
+        DBName NVARCHAR(255),
+        DBSynchronizationState NVARCHAR(50),
+        AlertMessage NVARCHAR(MAX)
+    );
+    
+    PRINT '================================================================================';
+    PRINT 'SQL SERVER REPLICATION & AVAILABILITY MONITORING - ' + @ExecutionTime;
+    PRINT 'Server: ' + @ServerName;
+    PRINT '================================================================================';
+    PRINT '';
+    
+    --###################### LOG SHIPPING MONITORING ############################
+    PRINT '>>> SECTION 1: LOG SHIPPING MONITORING';
+    
+    IF EXISTS (SELECT 1 FROM msdb.dbo.log_shipping_primary_databases)
+    BEGIN
+        INSERT INTO #LogShippingDetails (PrimaryDatabase, Status, AlertMessage)
+        SELECT 
+            lspd.primary_database,
+            CASE 
+                WHEN lspd.backup_job_id IS NULL THEN 'WARNING - No Backup Job'
+                ELSE 'OK'
+            END,
+            CASE 
+                WHEN lspd.backup_job_id IS NULL THEN 'Backup job not configured. Configure log shipping backup job.'
+                ELSE 'Log shipping is configured.'
+            END
+        FROM msdb.dbo.log_shipping_primary_databases lspd
+        WHERE lspd.backup_job_id IS NULL;
+        
+        SELECT @LogShippingIssueCount = COUNT(*) FROM #LogShippingDetails;
+        PRINT '    Log Shipping Details Collected: ' + CAST(@LogShippingIssueCount AS NVARCHAR(10)) + ' issues found';
+    END
+    ELSE
+    BEGIN
+        PRINT '    Log Shipping: Not Configured';
+    END
+    
+    PRINT '';
+    
+    --###################### DATABASE MIRRORING MONITORING ############################
+    PRINT '>>> SECTION 2: DATABASE MIRRORING MONITORING';
+    
+    IF EXISTS (SELECT 1 FROM sys.database_mirroring WHERE mirroring_role IS NOT NULL)
+    BEGIN
+        INSERT INTO #MirroringDetails (DatabaseName, MirrorState, MirrorRole, PrincipalServer, MirrorServer, AlertMessage)
+        SELECT 
+            db.name,
+            CASE dm.mirroring_state
+                WHEN 0 THEN 'Suspended'
+                WHEN 1 THEN 'Disconnected'
+                WHEN 2 THEN 'Synchronizing'
+                WHEN 3 THEN 'Synchronized'
+                WHEN 4 THEN 'Hardened'
+                ELSE 'Unknown'
+            END,
+            CASE dm.mirroring_role
+                WHEN 1 THEN 'Principal'
+                WHEN 2 THEN 'Mirror'
+                ELSE 'Unknown'
+            END,
+            ISNULL(dm.mirroring_partner_name, 'Not configured'),
+            ISNULL(dm.mirroring_witness_name, 'Not configured'),
+            CASE 
+                WHEN dm.mirroring_state = 0 THEN 'CRITICAL: Mirroring suspended. Resume mirroring immediately.'
+                WHEN dm.mirroring_state = 1 THEN 'CRITICAL: Mirroring disconnected. Check network connectivity.'
+                WHEN dm.mirroring_state = 2 THEN 'WARNING: Mirroring synchronizing. Wait for synchronized state.'
+                WHEN dm.mirroring_state = 3 OR dm.mirroring_state = 4 THEN 'OK: Mirroring operating normally.'
+                ELSE 'UNKNOWN: Unknown mirroring state.'
+            END
+        FROM sys.databases db
+        INNER JOIN sys.database_mirroring dm ON db.database_id = dm.database_id
+        WHERE dm.mirroring_role IS NOT NULL
+            AND (dm.mirroring_state <> 3 AND dm.mirroring_state <> 4);
+        
+        SELECT @MirroringIssueCount = COUNT(*) FROM #MirroringDetails;
+        PRINT '    Database Mirroring Details Collected: ' + CAST(@MirroringIssueCount AS NVARCHAR(10)) + ' issues found';
+    END
+    ELSE
+    BEGIN
+        PRINT '    Database Mirroring: Not Configured';
+    END
+    
+    PRINT '';
+    
+    --###################### REPLICATION MONITORING ############################
+    PRINT '>>> SECTION 3: REPLICATION MONITORING';
+    
+    IF EXISTS (SELECT 1 FROM msdb.sys.objects WHERE name = 'MSreplication_subscriptions')
+    BEGIN
+        IF EXISTS (SELECT 1 FROM msdb.dbo.MSreplication_subscriptions)
+        BEGIN
+            INSERT INTO #ReplicationDetails (SubscriberServer, SubscriptionDatabase, ReplicationStatus, AlertMessage)
+            SELECT 
+                rs.subscriber,
+                rs.subscriber_db,
+                CASE rs.status
+                    WHEN 0 THEN 'Uninitialized'
+                    WHEN 1 THEN 'Subscribed'
+                    WHEN 2 THEN 'Active'
+                    ELSE 'Unknown'
+                END,
+                CASE 
+                    WHEN rs.status = 0 THEN 'WARNING: Subscription not initialized. Run snapshot and distribution agent.'
+                    WHEN rs.status = 1 THEN 'ACTIVE: Subscription subscribed. Monitor for latency.'
+                    WHEN rs.status = 2 THEN 'OK: Subscription active and healthy.'
+                    ELSE 'UNKNOWN: Unknown subscription status.'
+                END
+            FROM msdb.dbo.MSreplication_subscriptions rs
+            WHERE rs.status <> 2;
+            
+            SELECT @ReplicationIssueCount = COUNT(*) FROM #ReplicationDetails;
+            PRINT '    Replication Details Collected: ' + CAST(@ReplicationIssueCount AS NVARCHAR(10)) + ' issues found';
+        END
+        ELSE
+        BEGIN
+            PRINT '    Replication: Configured but no subscriptions found';
+        END
+    END
+    ELSE
+    BEGIN
+        PRINT '    Replication: Not Configured';
+    END
+    
+    PRINT '';
+    
+    --###################### ALWAYSON AG MONITORING ############################
+    PRINT '>>> SECTION 4: ALWAYSON AVAILABILITY GROUP MONITORING';
+    
+    IF EXISTS (SELECT 1 FROM sys.availability_groups)
+    BEGIN
+        INSERT INTO #AlwaysOnDetails (AvailabilityGroupName, ReplicaName, ReplicaRole, ConnectedState, SyncHealth, DBName, DBSynchronizationState, AlertMessage)
+        SELECT 
+            ag.name,
+            ar.replica_server_name,
+            'Replica',
+            CASE ars.connected_state WHEN 0 THEN 'Disconnected' WHEN 1 THEN 'Connected' ELSE 'Unknown' END,
+            CASE ars.synchronization_health_desc
+                WHEN 'HEALTHY' THEN 'HEALTHY'
+                WHEN 'PARTIALLY_HEALTHY' THEN 'PARTIALLY_HEALTHY'
+                WHEN 'NOT_HEALTHY' THEN 'NOT_HEALTHY'
+                ELSE 'UNKNOWN'
+            END,
+            'Monitoring',
+            ISNULL(ars.synchronization_health_desc, 'UNKNOWN'),
+            CASE 
+                WHEN ars.connected_state = 0 THEN 'CRITICAL: Replica disconnected. Check network and rejoin cluster.'
+                WHEN ars.synchronization_health_desc = 'NOT_HEALTHY' THEN 'CRITICAL: Replica not healthy. Check error log.'
+                WHEN ars.synchronization_health_desc = 'PARTIALLY_HEALTHY' THEN 'WARNING: Some replicas not synchronized.'
+                ELSE 'OK: AG operating normally.'
+            END
+        FROM sys.availability_groups ag
+        INNER JOIN sys.availability_replicas ar ON ag.group_id = ar.group_id
+        INNER JOIN sys.dm_hadr_availability_replica_states ars ON ar.replica_id = ars.replica_id
+        WHERE ars.connected_state = 0 
+            OR ars.synchronization_health_desc <> 'HEALTHY';
+        
+        SELECT @AlwaysOnIssueCount = COUNT(DISTINCT AvailabilityGroupName) FROM #AlwaysOnDetails;
+        PRINT '    AlwaysOn AG Details Collected: ' + CAST(@AlwaysOnIssueCount AS NVARCHAR(10)) + ' issues found';
+    END
+    ELSE
+    BEGIN
+        PRINT '    AlwaysOn Availability Groups: Not Configured';
+    END
+    
+    PRINT '';
+    
+    --================== CALCULATE TOTAL ISSUES ==================
+    SELECT @TotalIssues = @LogShippingIssueCount + @MirroringIssueCount + @ReplicationIssueCount + @AlwaysOnIssueCount;
+    
+    PRINT '================================================================================';
+    PRINT 'REPLICATION & AVAILABILITY MONITORING SUMMARY';
+    PRINT '================================================================================';
+    PRINT 'Log Shipping Issues: ' + CAST(@LogShippingIssueCount AS NVARCHAR(10));
+    PRINT 'Database Mirroring Issues: ' + CAST(@MirroringIssueCount AS NVARCHAR(10));
+    PRINT 'Replication Issues: ' + CAST(@ReplicationIssueCount AS NVARCHAR(10));
+    PRINT 'AlwaysOn AG Issues: ' + CAST(@AlwaysOnIssueCount AS NVARCHAR(10));
+    PRINT 'Total Issues: ' + CAST(@TotalIssues AS NVARCHAR(10));
+    PRINT '';
+    
+    --================== DISPLAY LOG SHIPPING DETAILS ==================
+    IF @LogShippingIssueCount > 0
+    BEGIN
+        PRINT '>>> LOG SHIPPING DETAILS';
+        SELECT PrimaryDatabase, Status, AlertMessage
+        FROM #LogShippingDetails
+        ORDER BY PrimaryDatabase;
+        PRINT '';
+    END
+    
+    --================== DISPLAY MIRRORING DETAILS ==================
+    IF @MirroringIssueCount > 0
+    BEGIN
+        PRINT '>>> DATABASE MIRRORING DETAILS';
+        SELECT DatabaseName, MirrorState, MirrorRole, PrincipalServer, MirrorServer, AlertMessage
+        FROM #MirroringDetails
+        ORDER BY DatabaseName;
+        PRINT '';
+    END
+    
+    --================== DISPLAY REPLICATION DETAILS ==================
+    IF @ReplicationIssueCount > 0
+    BEGIN
+        PRINT '>>> REPLICATION DETAILS';
+        SELECT SubscriberServer, SubscriptionDatabase, ReplicationStatus, AlertMessage
+        FROM #ReplicationDetails
+        ORDER BY SubscriberServer;
+        PRINT '';
+    END
+    
+    --================== DISPLAY ALWAYSON AG DETAILS ==================
+    IF @AlwaysOnIssueCount > 0
+    BEGIN
+        PRINT '>>> ALWAYSON AG DETAILS';
+        SELECT AvailabilityGroupName, ReplicaName, ReplicaRole, ConnectedState, SyncHealth, DBName, DBSynchronizationState, AlertMessage
+        FROM #AlwaysOnDetails
+        ORDER BY AvailabilityGroupName, ReplicaName, DBName;
+        PRINT '';
+    END
+    
+    --================== SEND EMAIL IF ISSUES FOUND ==================
+    IF @TotalIssues > 0
+    BEGIN
+        SET @EmailSubject = 'SQL Server Replication & Availability Alert - ' + CAST(@TotalIssues AS NVARCHAR(10)) + ' Issue(s) on ' + @ServerName;
+        
+        --================== BUILD LOG SHIPPING TABLE ==================
+        IF @LogShippingIssueCount > 0
+        BEGIN
+            SET @LogShippingHTML = '<h3 style="margin-top: 20px; color: #2F5496;">Log Shipping Monitoring</h3>' +
+                '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%; font-family: Arial, sans-serif;">' +
+                '<tr style="background-color: #4472C4; color: white; font-weight: bold;"><td>Primary Database</td><td>Status</td><td>Alert Message</td></tr>';
+            
+            SELECT @LogShippingHTML += '<tr style="background-color: #FFFFFF;"><td>' + PrimaryDatabase + '</td><td>' + Status + '</td><td style="color: #FF0000;"><strong>' + AlertMessage + '</strong></td></tr>'
+            FROM #LogShippingDetails ORDER BY PrimaryDatabase;
+            
+            SET @LogShippingHTML += '</table>';
+        END
+        
+        --================== BUILD MIRRORING TABLE ==================
+        IF @MirroringIssueCount > 0
+        BEGIN
+            SET @MirroringHTML = '<h3 style="margin-top: 20px; color: #2F5496;">Database Mirroring Monitoring</h3>' +
+                '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%; font-family: Arial, sans-serif;">' +
+                '<tr style="background-color: #4472C4; color: white; font-weight: bold;"><td>Database</td><td>Mirror State</td><td>Role</td><td>Principal</td><td>Mirror</td><td>Alert Message</td></tr>';
+            
+            SELECT @MirroringHTML += '<tr style="background-color: #FFFFFF;"><td>' + DatabaseName + '</td><td>' + MirrorState + '</td><td>' + MirrorRole + '</td><td>' + PrincipalServer + '</td><td>' + MirrorServer + '</td><td style="color: #FF0000;"><strong>' + AlertMessage + '</strong></td></tr>'
+            FROM #MirroringDetails ORDER BY DatabaseName;
+            
+            SET @MirroringHTML += '</table>';
+        END
+        
+        --================== BUILD REPLICATION TABLE ==================
+        IF @ReplicationIssueCount > 0
+        BEGIN
+            SET @ReplicationHTML = '<h3 style="margin-top: 20px; color: #2F5496;">Replication Monitoring</h3>' +
+                '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%; font-family: Arial, sans-serif;">' +
+                '<tr style="background-color: #4472C4; color: white; font-weight: bold;"><td>Subscriber</td><td>Subscription Database</td><td>Status</td><td>Alert Message</td></tr>';
+            
+            SELECT @ReplicationHTML += '<tr style="background-color: #FFFFFF;"><td>' + SubscriberServer + '</td><td>' + SubscriptionDatabase + '</td><td>' + ReplicationStatus + '</td><td style="color: #FF0000;"><strong>' + AlertMessage + '</strong></td></tr>'
+            FROM #ReplicationDetails ORDER BY SubscriberServer;
+            
+            SET @ReplicationHTML += '</table>';
+        END
+        
+        --================== BUILD ALWAYSON TABLE ==================
+        IF @AlwaysOnIssueCount > 0
+        BEGIN
+            SET @AlwaysOnHTML = '<h3 style="margin-top: 20px; color: #2F5496;">AlwaysOn Availability Group Monitoring</h3>' +
+                '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%; font-family: Arial, sans-serif;">' +
+                '<tr style="background-color: #4472C4; color: white; font-weight: bold;"><td>AG Name</td><td>Replica</td><td>Role</td><td>Connected</td><td>Sync Health</td><td>Database</td><td>DB Sync</td><td>Alert Message</td></tr>';
+            
+            SELECT @AlwaysOnHTML += '<tr style="background-color: #FFFFFF;"><td>' + AvailabilityGroupName + '</td><td>' + ReplicaName + '</td><td>' + ReplicaRole + '</td><td>' + ConnectedState + '</td><td>' + SyncHealth + '</td><td>' + ISNULL(DBName, 'N/A') + '</td><td>' + ISNULL(DBSynchronizationState, 'N/A') + '</td><td style="color: #FF0000;"><strong>' + AlertMessage + '</strong></td></tr>'
+            FROM #AlwaysOnDetails ORDER BY AvailabilityGroupName, ReplicaName, DBName;
+            
+            SET @AlwaysOnHTML += '</table>';
+        END
+        
+        SET @EmailBody = '<html><head><style>body{font-family:Arial,sans-serif;font-size:12px}.header{background-color:#2F5496;color:white;padding:15px;border-radius:5px}.summary{margin:20px 0;padding:10px;background-color:#E7E6E6}.footer{margin-top:20px;font-size:10px;color:#666}h3{margin-top:20px;color:#2F5496}</style></head><body><div class="header"><h2>SQL Server Replication & Availability Monitoring Alert</h2><p><strong>Server:</strong> ' + @ServerName + '</p><p><strong>Execution Time:</strong> ' + @ExecutionTime + '</p></div><div class="summary"><h3>Summary</h3><p><strong>Total Issues:</strong> ' + CAST(@TotalIssues AS NVARCHAR(10)) + '</p><p>Log Shipping: ' + CAST(@LogShippingIssueCount AS NVARCHAR(10)) + ' | Mirroring: ' + CAST(@MirroringIssueCount AS NVARCHAR(10)) + ' | Replication: ' + CAST(@ReplicationIssueCount AS NVARCHAR(10)) + ' | AlwaysOn: ' + CAST(@AlwaysOnIssueCount AS NVARCHAR(10)) + '</p></div>' + ISNULL(@LogShippingHTML, '') + ISNULL(@MirroringHTML, '') + ISNULL(@ReplicationHTML, '') + ISNULL(@AlwaysOnHTML, '') + '<div class="footer"><p>Automated alert from SQL Server Replication & Availability Monitoring.</p></div></body></html>';
+        
+        EXEC msdb.dbo.sp_send_dbmail
+            @profile_name = @ProfileName,
+            @recipients = @DBAEmailList,
+            @subject = @EmailSubject,
+            @body = @EmailBody,
+            @body_format = 'HTML';
+        
+        PRINT 'Email sent successfully to: ' + @DBAEmailList;
+    END
+    ELSE
+    BEGIN
+        PRINT 'No issues found.';
+    END
+    
+    DROP TABLE #LogShippingDetails;
+    DROP TABLE #MirroringDetails;
+    DROP TABLE #ReplicationDetails;
+    DROP TABLE #AlwaysOnDetails;
+END
+GO
+
+-- Test execution
+-- EXEC usp_HADR_HealthCHECK
