@@ -14,7 +14,7 @@ BEGIN
     DECLARE @BackupHTML NVARCHAR(MAX) = '';
     DECLARE @CorruptionHTML NVARCHAR(MAX) = '';
     DECLARE @ProfileName NVARCHAR(128) = 'DBAAlerts';
-    DECLARE @DBAEmailList NVARCHAR(MAX) = 'praveensqldba12@gmail.com';
+    DECLARE @DBAEmailList NVARCHAR(MAX) = 'sqldbateam2026@gmail.com';
     DECLARE @ExecutionTime NVARCHAR(50) = CONVERT(NVARCHAR(50), GETDATE(), 121);
     DECLARE @ServerName NVARCHAR(128) = @@SERVERNAME;
     
