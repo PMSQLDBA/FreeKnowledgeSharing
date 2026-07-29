@@ -972,7 +972,7 @@ This stored procedure is provided as-is for internal use within your organizatio
 
 ## Related Documentation
 
-- [Microsoft Log Shipping Documentation](https://learn.microsoft.com/en-us/sql/database-engine/log-shipping/about-log-shipping)
+- [Microsoft Log Shipping Documentation](https://learn.microsoft.com/en-us/sql/database-engine/log-shipping/about-log-shipping-sql-server?view=sql-server-ver17)
 - [Microsoft Database Mirroring Documentation](https://learn.microsoft.com/en-us/sql/database-engine/database-mirroring/database-mirroring-sql-server)
 - [Microsoft Replication Documentation](https://learn.microsoft.com/en-us/sql/relational-databases/replication/sql-server-replication)
 - [Microsoft AlwaysOn AG Documentation](https://learn.microsoft.com/en-us/sql/database-engine/availability-groups/windows/overview-of-always-on-availability-groups-sql-server)
