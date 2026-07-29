@@ -777,4 +777,4 @@ END
 GO
 
 -- Test execution
--- EXEC usp_DBA_HealthCheck_Complete_V5;
+-- EXEC usp_DBA_HealthCheck;
