@@ -9,6 +9,7 @@ IMPORTANT NOTES:
 - Information accurate as of SQL Server 2022 and SQL Server 2025
 - Always test procedures in non-production environment before production use
 - For latest updates, refer to https://learn.microsoft.com/en-us/sql/database-engine/database-mirroring/
+
 ================================================================================
 
 FAQ 1: WHAT IS DATABASE MIRRORING IN SQL SERVER?
