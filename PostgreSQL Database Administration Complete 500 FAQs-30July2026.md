@@ -77,8 +77,11 @@ This document contains all 500 PostgreSQL DBA questions and answers in continuou
 ## 500+ End-to-End Scenarios and Disaster Recovery
 
 ### Version Reference
+
 PostgreSQL 18.4 (Latest Stable) | PostgreSQL 17.10 | PostgreSQL 16.14
+
 Source: PostgreSQL Official Documentation (https://www.postgresql.org/docs)
+
 Latest Update: July 2026
 
 ---
