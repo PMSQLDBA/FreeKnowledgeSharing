@@ -1,9 +1,13 @@
 # PostgreSQL Database Administration - Complete 500 FAQ Guide
 
 **Version:** 1.0 Complete  
+
 **Total Questions:** 500  
+
 **Drafted by:** Praveen Madupu
-**Date:** 30th July 2026 -- Thursday  
+
+**Date:** 30th July 2026 -- Thursday 
+
 **Source:** PostgreSQL 18.4 Official Documentation  
 
 ---
