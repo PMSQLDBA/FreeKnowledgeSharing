@@ -1,6 +1,7 @@
 SQL SERVER DATABASE MIRRORING REAL-TIME SCENARIO 100 FAQS 
 
 ================================================================================
+
 IMPORTANT NOTES:
 - All FAQs based on Microsoft Official Documentation and verified sources
 - Database Mirroring marked deprecated but fully supported in SQL Server 2019-2022
