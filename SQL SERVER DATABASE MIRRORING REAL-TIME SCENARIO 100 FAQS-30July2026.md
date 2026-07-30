@@ -1,4 +1,5 @@
 SQL SERVER DATABASE MIRRORING REAL-TIME SCENARIO 100 FAQS 
+
 ================================================================================
 IMPORTANT NOTES:
 - All FAQs based on Microsoft Official Documentation and verified sources
@@ -8,6 +9,7 @@ IMPORTANT NOTES:
 - Always test procedures in non-production environment before production use
 - For latest updates, refer to https://learn.microsoft.com/en-us/sql/database-engine/database-mirroring/
 ================================================================================
+
 FAQ 1: WHAT IS DATABASE MIRRORING IN SQL SERVER?
 
 Q: What is SQL Server Database Mirroring?
