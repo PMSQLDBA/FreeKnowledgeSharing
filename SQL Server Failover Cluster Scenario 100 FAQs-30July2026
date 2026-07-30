@@ -1,0 +1,1165 @@
+# SQL Server Failover Clustering Scenario-Based FAQs
+
+**Document Source**: Microsoft Learn official SQL Server documentation 
+**Applies to**: SQL Server 2017 and later versions
+**Last Verified**: July 2026  
+**Version**: 1.0
+**Drafted by**: Praveen Madupu
+
+---
+
+## TABLE OF CONTENTS
+
+1. [Core Concepts](#core-concepts)
+2. [FCI Architecture and Components](#fci-architecture-and-components)
+3. [Configuration and Setup](#configuration-and-setup)
+4. [Failover Mechanisms](#failover-mechanisms)
+5. [Quorum Modes and Voting](#quorum-modes-and-voting)
+6. [High Availability Features](#high-availability-features)
+7. [Disaster Recovery Scenarios](#disaster-recovery-scenarios)
+8. [Storage and Networking](#storage-and-networking)
+9. [Monitoring and Troubleshooting](#monitoring-and-troubleshooting)
+10. [Advanced Scenarios](#advanced-scenarios)
+
+---
+
+## CORE CONCEPTS
+
+### 1. What is a SQL Server Failover Cluster Instance?
+
+1. Single SQL Server instance installed across Windows Server Failover Clustering nodes providing local high availability at instance level
+2. Only one node owns WSFC resource group at any time with others standing by monitoring active node health
+3. Appears to clients as single computer running SQL Server despite spanning multiple physical servers
+4. Transparent failover from one node to another occurs without requiring client reconfiguration or application changes
+5. All resources managed by WSFC including network name, IP addresses, shared disks, Database Engine, Agent, and optional services
+
+---
+
+### 2. How does an FCI differ from Always On Availability Groups?
+
+1. FCIs provide instance-level redundancy for all databases as unit; Availability Groups provide database-level selective replication
+2. FCIs require shared storage accessible by all nodes; Availability Groups replicate across nodes using independent local storage
+3. FCIs automatic failover within local cluster only; Availability Groups support remote disaster recovery with up to eight secondary replicas
+4. Both use WSFC as underlying platform but serve different purposes for different scenarios
+5. Organizations can combine both technologies using FCI for local instance redundancy and Availability Groups for database-level replication
+6. FCIs ideal when every database must failover together; Availability Groups better for database-level control and read scaling
+
+---
+
+### 3. What are the key benefits of using SQL Server Failover Clustering?
+
+1. Protection at instance level through redundancy eliminating single point of failure for entire SQL Server installation
+2. Automatic failover occurs within seconds when hardware, operating system, or application failures detected
+3. Zero reconfiguration of applications and clients required during failovers since virtual network name remains constant
+4. Supports broad array of storage solutions including SAN, iSCSI, Storage Spaces Direct, CSV, and SMB file shares
+5. Flexible failover policy allows configuration of granular trigger events determining which failures cause automatic failovers
+6. Reliable health detection through periodic detailed component diagnostics prevents false failovers from system load
+
+---
+
+### 4. What is meant by transparent failover in SQL Server clustering?
+
+1. Client applications experience minimal awareness that failover occurred from one node to another
+2. Applications connect using virtual network name which remains registered and accessible throughout failover process
+3. Virtual network name automatically registered to new active node's IP addresses after failover completes
+4. Client connection requests automatically redirected to new active node without requiring configuration changes
+5. Existing connections temporarily interrupted but reconnection happens transparently through same virtual network name
+6. Provides continuous availability of SQL Server instance with minimal disruption to end users
+
+---
+
+### 5. What is the Recovery Time Objective (RTO) for SQL Server FCIs?
+
+1. RTO represents maximum time allowed for FCI to become available after failure
+2. Depends on checkpoint timing, dirty pages in buffer cache, failure detection time, and disk write operations
+3. SQL Server 2012 and later indirect checkpoints throttle dirty pages making failover time more predictable
+4. Typical RTO for SQL Server FCIs ranges from 30 seconds to several minutes depending on workload
+5. Organizations with strict RTO requirements should configure indirect checkpoints appropriately
+6. Regular failover testing validates actual recovery times meet SLA requirements in specific environments
+
+---
+
+### 6. What is the Recovery Point Objective (RPO) for SQL Server FCIs?
+
+1. RPO represents maximum amount of data loss acceptable to organization after failure
+2. FCIs typically have zero RPO because all nodes share identical database copies on shared storage
+3. New active node has immediate access to identical database files with no data loss after failover
+4. Fundamentally different from disaster recovery solutions where data loss may occur based on replication sync frequency
+5. SQL Server 2012 and later features reduce RPO through indirect checkpoints and flexible health monitoring
+6. RPO for FCIs is zero unless storage corruption occurs making data loss impossible from instance failure
+
+---
+
+### 7. Can an FCI span multiple geographic sites for disaster recovery?
+
+1. Yes, FCI can span multiple geographic sites using multi-subnet failover clustering providing both local and remote capabilities
+2. Stretched FCI uses single WSFC spanning multiple sites with nodes in different subnets enabling geographic failover
+3. Failover between subnets transparent to clients using same virtual network name across all locations
+4. Requires reliable low-latency network connectivity between sites, shared storage with replication, and proper DNS configuration
+5. Alternatively deploy independent clusters per site with Always On Availability Groups replicating data between clusters
+6. True disaster recovery combining FCI for local high availability with Availability Groups for database-level remote replication
+
+---
+
+## FCI ARCHITECTURE AND COMPONENTS
+
+### 8. What are the five core components of a SQL Server FCI?
+
+1. Nodes are physical servers participating in cluster where one node is active and others stand by monitoring health
+2. Shared storage is volume accessible simultaneously by all nodes provided by SAN, iSCSI, Storage Spaces Direct, or SMB
+3. WSFC is underlying platform monitoring node health via heartbeat, managing resource ownership, orchestrating failover
+4. Quorum is voting mechanism preventing split-brain scenarios where majority of votes must be reachable for cluster stability
+5. Virtual network name with IP addresses provides clients consistent connection point appearing as single SQL Server instance
+6. Components work in hierarchy where WSFC manages nodes, nodes share storage, virtual name provides client access point
+
+---
+
+### 9. What is shared storage and why is it required for FCIs?
+
+1. Shared storage is volume accessible by all cluster nodes simultaneously storing all database and log files
+2. Required because only one active node runs at time requiring all nodes immediate identical database access after failover
+3. Prevents synchronization delay by providing current database state on shared storage without replication overhead
+4. Can be implemented using SAN, iSCSI, Storage Spaces Direct, Cluster Shared Volumes, or SMB network shares
+5. Unlike Availability Groups which replicate data, FCIs require single shared storage as potential single point of failure
+6. Organizations must ensure shared storage has high availability, redundancy, and automatic failover capabilities
+
+---
+
+### 10. Can SQL Server FCIs use Storage Spaces Direct?
+
+1. Yes, SQL Server FCIs support Storage Spaces Direct introduced in Windows Server 2016 Datacenter edition
+2. S2D allows nodes to use locally attached disks aggregated into clustered storage pool with built-in replication
+3. Eliminates need for expensive SAN or iSCSI infrastructure by leveraging commodity servers with direct-attached storage
+4. Provides high availability through automatic data replication across nodes preventing data loss
+5. SQL Server 2016 and later fully support S2D for FCI installations with Datacenter Windows Server edition
+6. Requires careful planning for node configuration, storage sizing, and network bandwidth to ensure adequate performance
+
+---
+
+### 11. How does WSFC manage resource groups?
+
+1. WSFC manages which node owns resource group at any time controlling all associated resources
+2. Resource group contains network name, IP addresses, shared disks, SQL Server services, Agent, and optional services
+3. Only one node at any time owns resource group (active node) running all SQL Server services on that node
+4. WSFC continuously monitors active node health through heartbeat and detailed health checks
+5. During failure detection, WSFC automatically transfers resource group ownership to another healthy node
+6. Transfer process involves stopping services on failed node, registering virtual name to new node, starting services
+
+---
+
+### 12. What is a virtual network name and how does it work?
+
+1. Virtual network name is network identity assigned to FCI providing unified connection point independent of physical node
+2. Applications connect using virtual network name in connection strings rather than specific server names
+3. Seamless failover occurs without application changes as virtual name remains registered throughout failover
+4. Virtual network name automatically registered to new active node's IP addresses after failover completes
+5. Client connections reconnect transparently through same virtual name resolving to new active node
+6. Transparency is core benefit allowing existing applications to benefit from high availability without modification
+
+---
+
+### 13. What is quorum and why is it critical for FCI stability?
+
+1. Quorum is voting mechanism determining whether cluster has sufficient healthy components to operate safely
+2. Quorum node set is majority of voting nodes and witnesses; overall health determined by periodic quorum votes
+3. Each node participates in heartbeat sharing health status; failure to vote triggers precautionary cluster shutdown
+4. Prevents data corruption from split-brain scenarios where isolated node groups claim independent cluster ownership
+5. Best practice maintains odd number of quorum votes; witnesses placed in independent network locations
+6. Quorum failure brings entire WSFC and all FCI instances offline requiring manual intervention to restore
+
+---
+
+### 14. What are the SQL Server services controlled by WSFC in an FCI?
+
+1. Primary services controlled by WSFC are SQL Server Database Engine, SQL Server Agent, Analysis Services, FILESTREAM
+2. Services not started automatically on cluster nodes but managed by WSFC based on cluster health
+3. Only active node running resource group starts these services; passive nodes keep services stopped
+4. WSFC controls startup, shutdown, and failover based on active node health and configured failover policies
+5. Node failure stops services on failed node and starts on new active node maintaining service continuity
+6. Centralized service management ensures consistency and reliability across cluster
+
+---
+
+### 15. How many nodes can a single FCI support?
+
+1. SQL Server Standard Edition supports maximum two nodes in single FCI limiting high availability
+2. SQL Server Enterprise Edition supports maximum 16 nodes allowing larger clusters with greater fault tolerance
+3. Most production deployments use two to four nodes balancing cost against fault tolerance capability
+4. Additional nodes increase fault tolerance capability by allowing more simultaneous node failures
+5. Additional nodes also increase operational overhead for monitoring, patching, and troubleshooting
+6. Organizations should design cluster topology based on fault tolerance requirements and cost constraints
+
+---
+
+## CONFIGURATION AND SETUP
+
+### 16. What hardware requirements must be met before installing an FCI?
+
+1. All nodes must have similar hardware configuration with identical operating system version and patch levels
+2. Identical SQL Server version, patch level, and installed components required for full FCI functionality
+3. All nodes require network connectivity with sufficient bandwidth for heartbeat communication and health monitoring
+4. Each node requires dedicated IP address for cluster communication plus participation in virtual network name IPs
+5. Shared storage must be accessible simultaneously by all nodes through SAN, iSCSI, Storage Spaces Direct, or networks
+6. All nodes must have identical SQL Server instance names and service account configuration
+
+---
+
+### 17. Can SQL Server FCIs be installed on virtual machines?
+
+1. Yes, SQL Server FCIs are supported on Hyper-V virtual machines allowing maximum hardware utilization
+2. Virtual machines must be configured with sufficient resources to handle failover scenarios effectively
+3. Network configuration requires separate virtual network adapters for cluster communication and client connections
+4. Pass-through disk attachment or live migration must be configured to enable automated failover between hosts
+5. Virtual machine snapshots and checkpoints simplify disaster recovery but should not replace backup strategies
+6. Hypervisor-level high availability should be configured alongside SQL Server clustering for maximum availability
+
+---
+
+### 18. What operating systems support SQL Server FCIs?
+
+1. Supported operating systems include Windows Server 2012, 2012 R2, 2016, 2019, and 2022 versions
+2. Windows Server Datacenter editions required for advanced features like multi-subnet clustering and Storage Spaces Direct
+3. Each Windows Server version has specific requirements for cluster validation, hotfixes, and configuration settings
+4. SQL Server editions must match Windows Server capabilities for clustering support and feature availability
+5. Before installation verify operating system version and patch level meet Microsoft's recommended configuration
+6. Unsupported OS combinations may result in unsupported cluster configurations ineligible for Microsoft support
+
+---
+
+### 19. What is cluster validation and why is it essential?
+
+1. Cluster validation is comprehensive testing confirming all nodes, hardware, storage, and network meet Microsoft support requirements
+2. Validation wizard included in Failover Cluster Manager guides through series of tests including network, storage, MSDTC, DNS
+3. All tests must pass with green checkmarks or yellow triangles; red Xs indicate problems requiring resolution
+4. Validation confirms configuration is supported and behaves predictably under failure conditions
+5. Skipping validation risks unsupported configuration that behaves unpredictably or becomes ineligible for support
+6. Re-run validation after any significant hardware changes or configuration updates to maintain support status
+
+---
+
+### 20. What is the MSDTC resource in an FCI?
+
+1. MSDTC (Microsoft Distributed Transaction Coordinator) resource enables distributed transactions spanning multiple databases
+2. Windows Server 2008 or later allows multiple MSDTC resources on single failover cluster with first becoming default
+3. If no MSDTC resource exists, SQL Server uses MSDTC service running locally on each node
+4. Best practice creates dedicated clustered MSDTC resource for FCIs using distributed transactions
+5. MSDTC configuration managed through Component Services Management Console (dcomcnfg)
+6. SQL Server 2008 and later support configuring MSDTC resources during setup or after FCI installation
+
+---
+
+### 21. Must SQL Server binaries be installed identically on all nodes?
+
+1. Yes, SQL Server binaries must be installed identically including version, patch level, components, and instance name
+2. Binaries installed locally on each node (not shared storage) allowing individual node management
+3. Installation should be performed in same order with identical options across all nodes for consistency
+4. Service packs and cumulative updates must be applied identically to maintain configuration consistency
+5. New active node must have identical binaries during failover ensuring proper startup and feature functionality
+6. Regular patching requires coordinated approach applying updates to passive nodes first before active node
+
+---
+
+### 22. How should SQL Server login accounts be configured in an FCI?
+
+1. SQL Server login accounts must be identical across all FCI nodes including domain accounts for all services
+2. Domain accounts must have identical rights and permissions on all nodes ensuring cross-node functionality
+3. Local Windows accounts should not be used in FCIs because local account identity differs between nodes
+4. Security configuration should use domain accounts with minimal required permissions following principle of least privilege
+5. Test account functionality after failover ensuring jobs and services start properly on new active node
+6. Managed service accounts can automatically manage password changes across all cluster nodes
+
+---
+
+## FAILOVER MECHANISMS
+
+### 23. What are the types of failovers that can occur in an FCI?
+
+1. Automatic failover occurs when WSFC cluster detects failure meeting configured failover policy conditions
+2. Automatic failover triggered by SQL Server service stopped, repeated login failures, or memory pressure conditions
+3. Cluster automatically transfers resource group to healthy node without administrator intervention during automatic failover
+4. Manual failover occurs when administrators explicitly request resource group transfer using Failover Cluster Manager
+5. Manual failover used for maintenance, testing, or planned upgrades to specific nodes
+6. Both failover types transparent to client applications connected through virtual network name
+
+---
+
+### 24. What happens during automatic failover of an FCI?
+
+1. WSFC detects failure through heartbeat communication and health checks indicating active node is unresponsive
+2. All dirty pages in buffer cache written to disk unless hardware failure prevents disk access
+3. All SQL Server services on active node stopped by WSFC orchestration
+4. Resource group ownership transferred to healthy node selected by WSFC based on preferences
+5. New owner starts SQL Server services bringing instance online; virtual name registered to new node through DNS
+6. Client applications receive network errors, reconnect through virtual name resolving to new node IP address
+
+---
+
+### 25. What triggers automatic failover in an FCI?
+
+1. Hardware failures including power loss, network card failure, or SCSI controller failure trigger failover
+2. Operating system failures like kernel panic or unexpected shutdown trigger automatic failover
+3. Application or service failures detected through health monitoring trigger failover if configured
+4. Repeated login failures indicating instance not accepting connections trigger automatic failover
+5. SQL Server service termination or unexpected shutdown triggers failover
+6. Memory pressure or repeated out-of-memory errors trigger failover in some configurations
+
+---
+
+### 26. What is the failover policy and how is it configured?
+
+1. Failover policy is set of rules determining conditions triggering automatic failover and controlling failure response
+2. Flexible failover policy in SQL Server 2012 and later allows granular configuration at SQL Server component level
+3. Components monitored include Database Engine, SQL Server Agent, and other services with configurable thresholds
+4. Health detection uses dedicated connections polling active SQL Server for detailed component diagnostics
+5. Failover policy configured through SQL Server Management Studio Always On Dashboard or Windows PowerShell
+6. Detailed component diagnostics logged enabling better troubleshooting after failover by identifying trigger component
+
+---
+
+### 27. What is connection failover and how is it handled?
+
+1. Connection failover occurs when client connections interrupted during failover to new active node
+2. Existing connections receive network errors as active node becomes unavailable
+3. Applications must reconnect through same virtual network name now resolving to new active node
+4. Connection retry logic in client drivers and application code automatically attempts reconnection
+5. SQL Server client libraries support transparent connection failover with configurable retry logic
+6. New connections immediately accepted on new active node as SQL Server services start and name is registered
+
+---
+
+### 28. What is indirect checkpoint and how does it help failover?
+
+1. Indirect checkpoints in SQL Server 2012 and later throttle dirty pages kept in buffer cache during normal operations
+2. Proactively writes dirty pages to disk maintaining target recovery work rather than waiting for user-initiated checkpoint
+3. Significantly fewer dirty pages remain in cache during failover reducing disk write time before database comes online
+4. Makes recovery time objective (RTO) more predictable because disk write time during failover is reduced
+5. Increases I/O load during normal operations but makes failover faster and more reliable
+6. Organizations with strict RTO requirements should enable and tune indirect checkpoints based on I/O overhead tolerance
+
+---
+
+### 29. Can failover be tested without causing downtime?
+
+1. No, testing automatic failover in production FCI temporarily interrupts client connections and services
+2. Minimize disruption by testing during planned maintenance windows or on non-critical production systems
+3. Manual failover can be initiated through Failover Cluster Manager deliberately transferring resource group
+4. Testing validates failover occurs within acceptable time windows, client reconnection works properly
+5. Regular failover testing essential to validate high availability mechanisms function before actual failure
+6. After testing, failover back to original node if desired to maintain preferred node arrangement
+
+---
+
+### 30. What happens to running transactions during failover?
+
+1. All running transactions on active node are terminated during failover
+2. Client applications receive connection errors indicating connection was lost
+3. Transactions not replicated to passive nodes because nodes share identical database files
+4. Database consistency maintained as database brought online from last successful checkpoint
+5. Uncommitted transactions rolled back ensuring database integrity
+6. Applications must be designed to handle transaction failures and retry failed operations after reconnection
+
+---
+
+## QUORUM MODES AND VOTING
+
+### 31. What are the quorum modes supported by WSFC?
+
+1. Node Majority mode requires more than half of voting nodes to be online and communicating
+2. Node and Disk Majority mode requires majority of nodes or quorum disk plus majority of online nodes
+3. Node and File Share Majority mode uses file share witness instead of disk for geographic flexibility
+4. Cloud Witness mode uses Microsoft Azure storage as witness eliminating local infrastructure requirements
+5. Each mode provides different fault tolerance levels; choice depends on cluster topology and requirements
+6. Node Majority recommended for odd-numbered clusters; other modes provide options for even-numbered clusters
+
+---
+
+### 32. What is Node Majority quorum mode?
+
+1. Node Majority requires more than half of voting nodes in cluster to be online voting affirmatively
+2. In three-node cluster, two nodes must be online; in five-node cluster, three nodes required
+3. Recommended as default for odd-numbered clusters; simple and straightforward quorum determination
+4. If majority of nodes offline, cluster automatically shuts down preventing split-brain scenarios
+5. No additional witness infrastructure required reducing complexity and infrastructure cost
+6. Default recommendation for most FCI deployments due to simplicity and ease of troubleshooting
+
+---
+
+### 33. What is Node and Disk Majority quorum mode?
+
+1. Requires either majority of voting nodes plus quorum disk, or quorum disk and majority of remaining nodes
+2. Extends fault tolerance by using shared disk as tiebreaker allowing even-numbered clusters to tolerate single failure
+3. Quorum disk must be continuously accessible by all nodes through shared storage
+4. Recommended for even-numbered node clusters like two-node or four-node configurations
+5. If quorum disk becomes unavailable, quorum may be lost requiring careful disk management
+6. Quorum disk must be sized appropriately and monitored continuously for availability
+
+---
+
+### 34. What is Node and File Share Majority quorum mode?
+
+1. Similar to Node and Disk Majority but uses file share as witness instead of physical disk
+2. Witness file share contains cluster state information and votes on quorum decisions
+3. File share can be located on standalone server or network-attached storage accessible from all nodes
+4. Useful when shared disk storage unavailable or impractical
+5. File share witness less expensive than dedicated disk storage but requires reliable network connectivity
+6. Commonly used for branch office or stretched cluster deployments requiring independent witness location
+
+---
+
+### 35. What is a Cloud Witness in WSFC?
+
+1. Cloud Witness in Windows Server 2016 and later uses Microsoft Azure blob storage as witness
+2. Eliminates need for physical witness infrastructure simplifying deployment for cloud-integrated organizations
+3. Cluster nodes authenticate to Azure storage account to participate in quorum voting
+4. Provides similar functionality to file share witness with improved accessibility from geographically distributed clusters
+5. Excellent choice for multi-site or stretched clusters requiring high availability without physical witness maintenance
+6. Requires Azure subscription and network connectivity to Azure endpoints for witness communication
+
+---
+
+### 36. What is dynamic quorum in WSFC?
+
+1. Dynamic quorum in Windows Server 2012 R2 and later automatically adjusts required votes based on node availability
+2. If nodes go offline unexpectedly, dynamic quorum automatically reduces quorum requirement for remaining nodes
+3. Removes votes from offline nodes; after extended period offline node votes can be permanently removed
+4. Significantly improves cluster availability during phased failures or rolling updates
+5. Requires understanding how quorum voting changes over time during maintenance activities
+6. May need manual adjustment if permanent node removal occurs
+
+---
+
+### 37. What is dynamic witness in WSFC?
+
+1. Dynamic witness automatically manages witness disk or file share voting participation based on cluster state
+2. If cluster has odd number of voting nodes without witness, witness vote dynamically removed
+3. If cluster has even number of nodes, witness vote dynamically added
+4. Automatic adjustment simplifies cluster configuration reducing misconfiguration risk
+5. Requires Windows Server 2012 R2 or later and SQL Server 2012 R2 or later support
+6. Works seamlessly with dynamic quorum feature for optimal quorum stability
+
+---
+
+### 38. How does nodweight affect quorum voting?
+
+1. NodeWeight is per-node setting determining whether each node participates in quorum voting
+2. Each node assigned NodeWeight of 1 (participates) or 0 (does not participate in voting)
+3. Nodes with NodeWeight 0 remain cluster members but do not count toward quorum voting
+4. Useful for read-only or non-SQL Server nodes preventing them from affecting quorum calculations
+5. NodeWeight modifiable after cluster creation using Failover Cluster Manager or PowerShell
+6. Total node weights plus witness weights should be odd ensuring clear quorum decisions
+
+---
+
+### 39. What is quorum failure and what are its impacts?
+
+1. Quorum failure occurs when healthy voting nodes no longer satisfy quorum model for cluster
+2. Happens if more than half nodes offline, witness disk unavailable, or network partitioning isolates minority
+3. WSFC cluster automatically goes offline as safety measure preventing split-brain scenarios
+4. All SQL Server instances and services associated with cluster are stopped
+5. All client connections to FCI lost and databases become unavailable
+6. Manual intervention required using forced quorum procedures to restore cluster operation
+
+---
+
+### 40. How do you recover from quorum failure?
+
+1. Identify which nodes online and available; examine Windows Event logs and SQL Server error logs
+2. On healthiest surviving node, manually force cluster to start without quorum using forced quorum procedure
+3. WSFC service starts with forced quorum flag temporarily overriding quorum voting checks
+4. Normally start WSFC service on each other healthy node one at time preventing race conditions
+5. Apply new quorum mode and voting configuration reflecting surviving cluster topology
+6. Verify healthy quorum re-established; recover availability group databases as needed
+
+---
+
+## HIGH AVAILABILITY FEATURES
+
+### 41. What is health detection and how does it improve failover reliability?
+
+1. Health detection is WSFC capability monitoring node and SQL Server service health through multiple mechanisms
+2. Heartbeat communication sent between nodes at regular intervals detecting node availability
+3. Dedicated connections from WSFC to SQL Server instances poll for detailed component diagnostics
+4. If node or service fails to respond within configured timeouts, it is considered unhealthy triggering failover
+5. Prevents false failovers from temporary network congestion or high system load by distinguishing causes
+6. Multiple health checks performed before failover preventing cascade failures from isolated anomalies
+
+---
+
+### 42. How does SQL Server 2025 enforce strict connections to FCIs?
+
+1. SQL Server 2025 introduces support enforcing strict connections using TLS 1.3 encryption and TDS 8.0 protocol
+2. Strict connection enforcement requires clients to use strict encryption for FCI connections
+3. Provides additional security by validating certificate chains and preventing downgrade attacks
+4. Organizations can enforce during FCI configuration or enable on existing FCIs
+5. Clients must be updated to support TDS 8.0 and TLS 1.3 for connection compatibility
+6. SQL Server 2025 FCI installation requires TLS 1.2 or later enabled on all nodes
+
+---
+
+### 43. What is the role of virtual IP addresses in multi-subnet FCIs?
+
+1. Virtual IP addresses assigned to FCI one per subnet in multi-subnet deployments
+2. Clients connect through virtual network name resolving to IP address in active node's subnet
+3. After failover to node in different subnet, virtual name updates to resolve to new subnet's IP address
+4. Seamless failover across subnets without clients knowing subnet changes occurred
+5. Eliminates need for Virtual LANs reducing network complexity
+6. Virtual IP addresses must be properly configured during FCI setup with DNS supporting automatic registration
+
+---
+
+### 44. What is a multi-subnet FCI and when should it be used?
+
+1. Multi-subnet FCI has cluster nodes in different network subnets typically for disaster recovery purposes
+2. Provides both local high availability and remote disaster recovery without requiring VLAN configuration
+3. Each subnet has virtual IP address assigned to FCI resource group
+4. Failover between subnets transparent with virtual name updating to resolve to new subnet IP
+5. Requires reliable low-latency network connectivity, shared storage with replication, proper DNS and quorum
+6. Used when disaster recovery to remote site needed combined with local failover capability
+
+---
+
+### 45. What monitoring tools are available for FCIs?
+
+1. Failover Cluster Manager provides Windows cluster monitoring and management capabilities
+2. SQL Server Management Studio Always On Dashboard displays SQL Server-specific health information
+3. System dynamic management views provide programmatic health queries and status information
+4. Windows Event Viewer logs cluster and system events; SQL Server error logs detail SQL Server events
+5. Third-party monitoring tools integrate with WSFC APIs and SQL Server DMVs for comprehensive monitoring
+6. Regular monitoring of cluster health, node connectivity, storage, and SQL Server components essential for uptime
+
+---
+
+### 46. What licensing considerations apply to FCIs?
+
+1. SQL Server licensing includes per-core licensing for active node plus passive node licenses
+2. All cluster nodes must have SQL Server licenses even though only one runs actively
+3. Active software assurance enables passive node licenses at no additional cost for high availability scenarios
+4. SQL Server Standard Edition supports maximum two nodes; Enterprise Edition supports up to 16 nodes
+5. Organizations must verify licensing arrangements with Microsoft for compliance with specific agreements
+6. Passive node licensing costs significant factor in FCI deployment economics
+
+---
+
+### 47. What is the maximum size of an FCI?
+
+1. SQL Server Standard Edition supports maximum two nodes limiting high availability options
+2. SQL Server Enterprise Edition supports maximum 16 nodes allowing larger fault-tolerant clusters
+3. Maximum database count per FCI limited only by SQL Server edition not clustering
+4. Maximum shared storage size limited only by underlying storage solution SAN capacity
+5. Larger clusters more complex to manage, patch, and troubleshoot operationally
+6. Organizations should right-size clusters balancing fault tolerance against operational complexity
+
+---
+
+## DISASTER RECOVERY SCENARIOS
+
+### 48. What is a disaster recovery strategy for SQL Server?
+
+1. Comprehensive strategy includes multiple layers: backups, log shipping, Availability Groups, multi-subnet FCIs
+2. Define Recovery Time Objective (RTO) and Recovery Point Objective (RPO) requirements for different database tiers
+3. Local high availability uses FCIs or Always On minimizing downtime from hardware failures
+4. Remote disaster recovery uses Always On Availability Groups, log shipping, or backup restore procedures
+5. Regular testing of disaster recovery procedures essential validating recovery time and data loss estimates
+6. Documentation of disaster recovery plan and procedures enables rapid execution during actual failures
+
+---
+
+### 49. How do you combine FCIs with Always On Availability Groups for disaster recovery?
+
+1. Configure FCI in primary site providing automatic failover between multiple nodes within site
+2. Configure Always On Availability Group for databases on FCI with secondary replicas on remote site
+3. Secondary replicas receive log records from primary replica asynchronously or synchronously
+4. If primary site fails completely, applications failover to remote secondary replica with acceptable data loss
+5. Individual server failures within primary site trigger automatic FCI failover transparently
+6. Combined approach maximizes availability and disaster recovery using both instance and database-level redundancy
+
+---
+
+### 50. What is RPO/RTO analysis and why is it important?
+
+1. RPO analysis determines acceptable data loss after failure measured as time to last backup or synchronized replica
+2. RTO analysis determines how quickly system must be restored from failure occurrence to service availability
+3. RPO/RTO requirements should be defined for all critical databases and systems
+4. Select appropriate technologies based on RPO and RTO requirements determined from business analysis
+5. Synchronously replicated databases have RPO near zero; asynchronous replication has RPO based on replica lag
+6. Regular testing validates projected RPO and RTO are achievable in your specific environment
+
+---
+
+### 51. What is a stretched cluster and how is it configured for disaster recovery?
+
+1. Stretched cluster is single WSFC spanning multiple geographic sites with FCI nodes distributed across sites
+2. Combines local high availability with disaster recovery allowing failover across sites with shared storage access
+3. Requires reliable low-latency network connectivity between sites typically within 10ms latency
+4. Shared storage must be accessible from all sites using SAN replication or storage array technologies
+5. DNS and quorum configuration must account for multi-site topology
+6. Appropriate when shared storage can be replicated between sites and network latency supports cluster stability
+
+---
+
+### 52. What is the forced quorum procedure used for?
+
+1. Forced quorum procedure used specifically for disaster recovery when quorum failure occurs
+2. Allows single node to start cluster overriding quorum voting checks when normal quorum cannot be restored
+3. Manual emergency procedure used only when systemic failures or persistent communication failures prevent quorum
+4. Involves starting WSFC service with forced quorum flag on healthiest surviving node
+5. Other healthy nodes brought online one at time after first node established
+6. Quorum mode and voting updated reflecting surviving topology after cluster recovery
+
+---
+
+### 53. What precautions must be taken when using forced quorum?
+
+1. Verify scope of failure by examining logs identifying which nodes are online and available
+2. Disable WSFC on other nodes before starting one node with forced quorum preventing multiple independent clusters
+3. Start only one node with forced quorum initially establishing new cluster state
+4. Bring other nodes online one at time after first node is stable preventing race conditions
+5. After all nodes online, apply new quorum mode and voting reflecting surviving topology
+6. Document root cause of quorum failure and implement preventive measures before resuming operations
+
+---
+
+### 54. How do you handle split-brain scenarios in FCIs?
+
+1. Split-brain occurs when network partition causes multiple node groups claiming independent cluster ownership
+2. Quorum voting prevents split-brain in properly configured clusters requiring majority votes for operation
+3. Only node group with majority votes remains online; minority group automatically goes offline
+4. Prevent split-brain by maintaining odd quorum votes, witness in independent location, regular validation
+5. If split-brain occurs, force quorum on only one node group and offline all other isolated nodes
+6. Split-brain can cause data corruption if isolated groups independently modify databases
+
+---
+
+### 55. What happens during site failure in a multi-subnet FCI?
+
+1. If failed site contained nodes necessary for quorum, cluster may go offline due to quorum loss
+2. If remaining nodes have sufficient votes for quorum, cluster remains online and accessible
+3. Databases on shared storage remain accessible from surviving site
+4. When failed site restored with network connectivity, nodes automatically rejoin cluster
+5. Client applications experience temporary connection interruptions until DNS updates propagate
+6. Proper quorum configuration essential for cluster stability during site failures
+
+---
+
+### 56. What is log shipping and how does it complement FCI for disaster recovery?
+
+1. Log shipping continuously copies transaction logs from primary database to standby database on remote server
+2. Complements FCI by providing additional disaster recovery layer beyond local high availability
+3. Requires transaction log backups, copying to remote server, and restoring to standby database
+4. In site failure, standby database can be recovered from last restored log
+5. Requires more operational overhead than Always On Availability Groups but simpler than dedicated instances
+6. Can combine FCI for local high availability with log shipping for remote disaster recovery
+
+---
+
+### 57. What backup strategy should be used with FCIs?
+
+1. Backups can be taken from any node without duplication since all access identical database files
+2. Backup copies stored on independent storage separate from cluster shared storage preventing storage failures
+3. Transaction log backups taken frequently supporting point-in-time recovery and minimizing data loss
+4. Full database backups taken regularly for disaster recovery and compliance purposes
+5. Backup strategy designed around Recovery Point Objective requirements and storage capacity
+6. Backup testing included in disaster recovery drills validating successful restore procedures
+
+---
+
+### 58. What is the role of database mirroring in high availability?
+
+1. Database mirroring is deprecated SQL Server high availability technology still existing in legacy deployments
+2. Maintains synchronized database copy on mirror server providing automatic failover if principal fails
+3. Requires separate SQL Server instances on each server maintaining duplicate infrastructure
+4. SQL Server 2016 and later recommend Always On Availability Groups instead for new deployments
+5. Organizations should migrate from database mirroring to Always On Availability Groups
+6. Database mirroring may continue functioning in SQL Server but is not recommended for new installations
+
+---
+
+### 59. How do you plan for database recovery after FCI failover?
+
+1. After failover, databases immediately accessible on new active node from shared storage
+2. Databases automatically transition from failed node to new node without recovery delay
+3. User sessions disconnected during failover; applications reconnect after failover completes
+4. No manual database recovery typically needed because database files never inaccessible
+5. After actual hardware failures, failed node should be repaired and storage checked for data consistency
+6. Failed node re-validated in cluster before bringing back online as standby node
+
+---
+
+### 60. What is the significance of Transaction Log backup intervals?
+
+1. Transaction log backup intervals determine maximum data loss if database recovered from backup
+2. Shorter intervals mean less data loss but increase backup traffic and storage overhead
+3. Longer intervals save resources but increase potential data loss after failure
+4. FCIs should align transaction log backup intervals with RPO requirements
+5. Recommended practice takes transaction log backups every 5 to 15 minutes for production systems
+6. Always On Availability Groups continuously send log records to secondaries providing near-zero RPO
+
+---
+
+## STORAGE AND NETWORKING
+
+### 61. What storage solutions are supported for FCIs?
+
+1. SAN (Storage Area Networks) using Fiber Channel or iSCSI provides high performance but requires capital investment
+2. Storage Spaces Direct leverages commodity servers reducing cost but requiring careful configuration
+3. Cluster Shared Volumes support Hyper-V environments enabling virtual machine clusters
+4. SMB file shares provide simple network-based storage; may have latency overhead
+5. Azure shared storage enables cloud deployments integrated with on-premises infrastructure
+6. Organizations evaluate storage options based on performance, cost, and operational complexity requirements
+
+---
+
+### 62. Can SQL Server FCIs use iSCSI storage?
+
+1. Yes, SQL Server FCIs fully support iSCSI storage for cluster shared disks
+2. iSCSI allows cluster nodes to access shared storage over IP networks as cost-effective alternative to Fiber Channel
+3. All nodes must have iSCSI initiators configured connecting to same target LUNs
+4. Network bandwidth must be sufficient for SQL Server workload and cluster heartbeat traffic
+5. iSCSI initiator software configured identically on all nodes with multiple paths for reliability
+6. Organizations validate iSCSI performance adequate for workloads and configure automatic failover on connection loss
+
+---
+
+### 63. What is Cluster Shared Volumes (CSV) and when is it used?
+
+1. CSV is Windows failover clustering feature allowing multiple nodes to simultaneously access block storage
+2. Normally block storage accessed by only one node; CSV enables multiple Hyper-V VMs accessing same disk files
+3. Supported with SQL Server 2014 and later versions for FCI deployments
+4. Simplifies storage management and enables live migration of virtual machines in Hyper-V clusters
+5. Virtualized SQL Server deployments should evaluate CSV benefits versus traditional storage approaches
+6. Requires Windows Server support for CSV in cluster configuration
+
+---
+
+### 64. What is Storage Spaces Direct and what are its benefits for FCIs?
+
+1. S2D in Windows Server 2016 and later aggregates directly attached storage on cluster nodes into pool
+2. Eliminates dedicated SAN infrastructure by leveraging commodity servers with directly attached disks
+3. Built-in replication provides automatic data redundancy across nodes
+4. Cost-effective for organizations wanting cluster storage without SAN investment
+5. Requires careful cluster planning for node configuration, storage sizing, and network design
+6. Supports mixed workloads across multiple SQL Server instances in same cluster
+
+---
+
+### 65. How should cluster network connectivity be configured?
+
+1. Configure dedicated networks for cluster heartbeat communication separate from client connection network
+2. Separate network for storage access reduces contention and improves reliability
+3. Network interface bonding or teaming provides failover if individual network adapters fail
+4. All nodes must have identical network configuration for cluster stability
+5. Network switches configured for full mesh connectivity allowing direct communication between all nodes
+6. Firewalls configured allowing cluster communication on required ports while restricting unnecessary access
+
+---
+
+### 66. What network latency is acceptable for FCIs?
+
+1. For single-site FCIs, network latency should be minimal typically less than 1 millisecond within data center
+2. For multi-subnet FCIs spanning geographic distances, network latency becomes more significant
+3. Microsoft recommends maximum 10 milliseconds latency between nodes for stable cluster operation
+4. Beyond 10 milliseconds latency, cluster heartbeat timeouts may occur causing false failovers
+5. Adequate network bandwidth must support cluster heartbeat, SQL Server replication, and storage replication
+6. Organizations should perform network tests before multi-subnet FCI production deployment
+
+---
+
+### 67. How do you configure DNS for FCIs?
+
+1. DNS configured to register virtual network name and IP addresses of FCI
+2. Virtual network name resolves to IP address of currently active node
+3. In multi-subnet FCIs, virtual name resolves to IP address in appropriate subnet for each client
+4. DNS dynamic updates should be enabled allowing WSFC to automatically update records during failover
+5. DNS TTL values set low (60 to 300 seconds) allowing clients to quickly pick up IP changes
+6. DNS tested after cluster creation verifying name resolution functions correctly
+
+---
+
+### 68. What is the role of network segmentation in FCI security?
+
+1. Network segmentation isolates cluster traffic from general data center traffic improving security
+2. Cluster nodes have dedicated network segments for heartbeat, client connections, and storage access
+3. Network policies allow cluster communication between nodes; firewalls restrict unauthorized access
+4. Restrict access to cluster administration interfaces through policy controls
+5. VLANs provide network segmentation in large environments
+6. Network segmentation reduces unauthorized access risk and improves overall security posture
+
+---
+
+## MONITORING AND TROUBLESHOOTING
+
+### 69. What are critical cluster health indicators?
+
+1. Node connectivity status with all nodes online and responsive to cluster communication
+2. Quorum status showing healthy quorum with majority votes available
+3. Resource group status with resources online and owned by active node
+4. Shared storage accessibility with all storage devices accessible from all nodes
+5. DNS resolution successfully resolving virtual name to current active node
+6. SQL Server services running on active node and stopped on passive nodes
+
+---
+
+### 70. How do you monitor cluster events and logs?
+
+1. Cluster events logged to Windows Event Viewer System log and Failover Clustering-specific logs
+2. SQL Server errors logged to SQL Server error logs; review logs regularly for issues
+3. Failover Cluster Manager provides graphical interface for cluster status and events viewing
+4. Get-ClusterLog PowerShell cmdlet captures comprehensive cluster diagnostics spanning multiple nodes
+5. Always On Dashboard in SQL Server Management Studio displays instance and availability group health
+6. Log aggregation tools centralize logs enabling event correlation across nodes during failures
+
+---
+
+### 71. What troubleshooting steps should be performed when failover fails?
+
+1. Verify cluster heartbeat communication is functional between nodes through diagnostic tools
+2. Check quorum health with sufficient votes; review Event logs for error messages
+3. Verify active node is actually unhealthy checking connectivity, services, and disk access
+4. Check failover policy configuration ensuring detected failure condition triggers automatic failover
+5. Verify passive nodes available and capable of taking resource group ownership
+6. Perform manual failover testing if cluster capable of transferring resource group
+
+---
+
+### 72. How do you validate cluster configuration?
+
+1. Use Failover Cluster Manager validation wizard testing hardware, storage, network, and software configuration
+2. Validation tests include network connectivity, storage accessibility, quorum, MSDTC, DNS, Windows version
+3. All validation tests should pass with green checkmarks or yellow warnings
+4. Red X validation failures must be resolved before production deployment
+5. Re-run validation after significant hardware changes, storage updates, or network reconfiguration
+6. Failed validation indicates unsupported configuration behaving unpredictably under failure conditions
+
+---
+
+### 73. How do you troubleshoot failed failovers?
+
+1. Check passive nodes are online and responsive through Failover Cluster Manager or PowerShell
+2. Verify shared storage accessible from target node testing disk connectivity
+3. Check SQL Server binaries properly installed on target node
+4. Review SQL Server error log for startup errors preventing services from starting
+5. Check account permissions ensuring SQL Server accounts have required rights on target node
+6. Verify DNS resolves virtual name from client machines
+
+---
+
+### 74. What diagnostic tools are available for cluster troubleshooting?
+
+1. Failover Cluster Manager provides graphical cluster status viewing and management
+2. Get-Cluster PowerShell cmdlets provide command-line cluster diagnostics
+3. Get-ClusterLog captures comprehensive cluster event logs
+4. eventvwr.exe provides Windows Event Viewer access to system and cluster logs
+5. SQL Server error logs provide instance-specific diagnostics
+6. Combine information from multiple tools to identify root cause of failures
+
+---
+
+### 75. How do you perform cluster maintenance without causing downtime?
+
+1. Gracefully fail over resources from node being serviced to another node using manual failover
+2. Perform maintenance or updates on now-passive node
+3. Fail resources back to original node if desired after maintenance
+4. Minimizes service disruption with resource availability maintained during maintenance
+5. Critical updates requiring cluster service restart need planned maintenance windows
+6. Validate cluster configuration after maintenance using validation wizard
+
+---
+
+### 76. What is the impact of DNS registration delays?
+
+1. DNS registration delays occur when virtual name doesn't immediately resolve to new node's IP after failover
+2. During delay period, client connection attempts fail or timeout
+3. DNS TTL values set low (60 to 300 seconds) minimize impact of DNS delays
+4. Client DNS caches cleared during failover testing verifies correct IP resolution
+5. Client retry logic handles temporary DNS resolution failures
+6. For critical applications, adjust client DNS cache settings to always query for FCI names
+
+---
+
+## ADVANCED SCENARIOS
+
+### 77. How do you upgrade SQL Server in an FCI?
+
+1. SQL Server upgrades performed on all nodes maintaining consistency across cluster
+2. Rolling upgrade approach upgrades passive nodes first, then fails over and upgrades remaining node
+3. SQL Server setup runs on passive nodes while active node continues running
+4. After all nodes upgraded, applications continue using FCI without reconfiguration
+5. Critical testing performed after upgrade before resuming production workloads
+6. Backup and recovery procedures tested with upgraded SQL Server version
+
+---
+
+### 78. Can you have multiple FCIs in the same cluster?
+
+1. Yes, single WSFC cluster can host multiple SQL Server FCIs with sufficient hardware capacity
+2. Each FCI requires dedicated resource group with unique virtual name, IP addresses, and instance name
+3. Each FCI requires dedicated shared storage or separate LUNs on shared storage system
+4. Multiple FCIs can be hosted on same cluster nodes with load distributed, or on separate dedicated nodes
+5. Managing multiple FCIs increases operational complexity requiring careful resource allocation
+6. Each FCI is independent and failovers of one FCI do not affect others
+
+---
+
+### 79. How do you handle SQL Server Job execution across failover?
+
+1. SQL Server Agent jobs scheduled on FCIs may miss execution times if failover occurs during execution
+2. Job schedules designed with knowledge that failover can occur anytime
+3. Long-running jobs should be idempotent allowing re-execution without side effects
+4. Job status checked after failover determining if jobs interrupted and require re-execution
+5. Critical jobs monitored ensuring successful completion after failover
+6. Consider implementing job ownership and alerting verifying critical jobs execute properly
+
+---
+
+### 80. How do you manage SQL Server Agent on FCIs?
+
+1. SQL Server Agent service managed by WSFC and starts only on active node
+2. Jobs stored in databases on shared storage accessible by SQL Agent on any node
+3. When failover occurs, SQL Agent on new active node starts and resumes processing job queue
+4. Jobs running during failover interrupted and may require re-execution
+5. SQL Agent runs under domain service account requiring identical configuration on all nodes
+6. Job failures monitored with alerting configured for critical job failures
+
+---
+
+### 81. What is the relationship between AlwaysOn Availability Groups and FCIs?
+
+1. Always On Availability Groups can be created on top of FCIs providing database-level replication
+2. FCI provides instance-level redundancy; Availability Groups provide database-level replication
+3. FCI can host multiple Availability Groups with different secondary replicas
+4. Databases in Availability Group fail over independently from FCI instance
+5. If FCI fails, all Availability Groups on that FCI are affected
+6. Combination maximizes availability with both instance and database-level redundancy
+
+---
+
+### 82. Can you use Always On Availability Groups without Failover Clustering?
+
+1. Yes, Always On Availability Groups operate independently without requiring failover cluster instances
+2. Availability Groups can consist of standalone SQL Server instances or mix of standalone and FCI nodes
+3. Configuration provides database-level replication without instance-level high availability from FCIs
+4. Organizations not requiring instance-level high availability can use standalone servers with Availability Groups
+5. Combining FCIs with Availability Groups maximizes availability by providing both instance and database redundancy
+6. Single-node deployments without instance redundancy requirements can use Availability Groups alone
+
+---
+
+### 83. How do you handle user permissions and logins across FCI failover?
+
+1. SQL Server logins and user permissions stored in system databases on shared storage identical on all nodes
+2. When failover occurs, users maintain permissions without reconfiguration
+3. Server-level roles, database-level roles, and object permissions preserved after failover
+4. SQL Server service accounts and domain accounts for jobs must have identical configuration on all nodes
+5. Windows integrated authentication uses domain accounts working transparently across failover
+6. Verify authentication works correctly after failover as part of failover testing
+
+---
+
+### 84. How do you handle SQL Server replication with FCIs?
+
+1. SQL Server replication (transactional, merge, snapshot) configured with FCIs as publishers or subscribers
+2. When failover occurs, replication agents continue operation from new active node
+3. Long-running replication jobs interrupted during failover may require re-execution
+4. Distribution database should be on independent storage or separate FCI for high availability
+5. Replication monitoring includes alerts for agent failures and replication lag
+6. Test replication failover scenarios validating replication continues correctly after instance failover
+
+---
+
+### 85. How do you configure audit and compliance with FCIs?
+
+1. SQL Server auditing captures security events and data access based on configured audit specifications
+2. Audit logs written to independent storage or remote server ensuring audit trails survive failures
+3. SQL Server Audit writes to Windows Application Event log or file
+4. Audit files stored on independent storage, not shared cluster storage
+5. After failover, auditing automatically continues on new active node
+6. Compliance requirements like HIPAA, PCI, SOX require specific audit trails and retention policies
+
+---
+
+### 86. What are licensing implications of running multiple databases on FCIs?
+
+1. SQL Server licensing based on per-core licensing of active node plus passive standby node licenses
+2. Number of databases on FCI does not affect licensing costs
+3. Database features used (SQL Agent, Replication, Enterprise features) must be licensed appropriately
+4. Multiple databases on shared FCI may be less cost-effective than single-database FCIs
+5. Single-database FCIs reduce blast radius of failures and simplify management
+6. Organizations consider whether database consolidation benefits outweigh support costs
+
+---
+
+### 87. How do you implement automatic backups with FCIs?
+
+1. SQL Server maintenance plans and backup jobs configured on FCIs automate database backups
+2. Backup jobs run on whichever node is currently active
+3. Backup storage must be independent from cluster shared storage preventing storage failures
+4. Backup jobs configured with retry logic handling temporary failures
+5. Backup completion monitored with alerting for backup failures
+6. Full, differential, transaction log backups scheduled based on RPO requirements
+
+---
+
+### 88. How do you troubleshoot network connectivity issues in clusters?
+
+1. Verify physical network connections functional on all nodes and switches
+2. Use ipconfig verify IP configuration on all nodes
+3. Use ping test connectivity between all node pairs on cluster network
+4. Use netstat verify cluster communication ports listening and responding
+5. Use network monitoring tools capture cluster heartbeat traffic
+6. Check firewall logs if firewalls block cluster communication
+
+---
+
+### 89. How do you handle SQL Server security configuration across FCIs?
+
+1. SQL Server security including authentication and application roles stored in system databases on shared storage
+2. Configuration changes made on active node immediately available on passive nodes
+3. Server-level audit specifications and trigger settings synchronized across nodes
+4. Database principals and permissions stored per database identical on all nodes
+5. Security configuration changes tested thoroughly before production cluster deployment
+6. After failover, security configuration remains consistent without requiring re-configuration
+
+---
+
+### 90. What is the role of Windows updates and patching in FCI stability?
+
+1. Windows updates and security patches critical for FCI security and stability
+2. Windows patches applied to all cluster nodes using rolling update approach
+3. SQL Server service packs and cumulative updates applied after Windows patches
+4. Testing of updates performed on test clusters before production deployment
+5. Implement automatic WSUS update management with careful scheduling avoiding simultaneous reboots
+6. Out-of-date systems at risk for security vulnerabilities and unsupported configuration
+
+---
+
+### 91. How do you handle resource group ownership transfer?
+
+1. Resource group ownership transfer occurs during manual failover or automatic failover
+2. WSFC automatically selects next node based on node preferences configured in FCI properties
+3. Preferred owners list determines node selection order if current owner fails
+4. Failover target can be specified during manual failover through Failover Cluster Manager
+5. SQL Server services on current owner stopped gracefully if possible, started on new owner
+6. Virtual network name registered to new owner's IP addresses through DNS
+
+---
+
+### 92. What is the impact of adding a new node to an existing FCI?
+
+1. New node must have identical hardware configuration and software installation as existing nodes
+2. SQL Server binaries installed identically including service packs and updates
+3. Cluster expanded to include new node using cluster management tools
+4. New node added as passive standby node
+5. Cluster validation must pass completely with no errors
+6. Cluster failover tested verifying new node can successfully take resource group ownership
+
+---
+
+### 93. Can you have asymmetric hardware configurations in FCIs?
+
+1. Microsoft best practice maintains consistent hardware across FCI nodes including CPU, RAM, network cards
+2. Asymmetric configurations complicate troubleshooting and support
+3. Temporary asymmetric configurations may be acceptable for planned maintenance scenarios
+4. Ensure most powerful node available to run FCI if other nodes fail
+5. Document hardware differences and ensure adequate capacity on lesser-configured nodes
+6. Performance testing verifies acceptable performance on all node configurations
+
+---
+
+### 94. How do you handle split-brain scenarios at the application level?
+
+1. Split-brain at application level occurs when multiple instances independently access database
+2. Application connection strings should always use FCI virtual name rather than specific node names
+3. Application-level locking or coordination prevents concurrent execution during split-brain
+4. Database constraints and unique indexes prevent concurrent duplicate data insertion
+5. Transaction logs help identify and recover from split-brain data corruption
+6. Quorum voting prevents cluster-level split-brain; application-level coordination adds additional safety
+
+---
+
+### 95. How do you test disaster recovery procedures with FCIs?
+
+1. Test backup recovery procedures validating backups can be restored
+2. Test manual failover procedures verifying failover mechanism operation
+3. Test recovery from quorum failure using forced quorum procedures on test cluster
+4. Test database recovery after failover scenarios
+5. Test application reconnection logic after failover
+6. Document actual recovery time and verify it meets RTO requirements
+
+---
+
+### 96. What monitoring should be in place for proactive issue detection?
+
+1. Track cluster health including node status, quorum status, and resource group ownership
+2. Monitor network connectivity and latency between nodes detecting communication issues
+3. Monitor shared storage accessibility and performance
+4. Monitor SQL Server service status and database health
+5. Monitor replication lag if using Availability Groups
+6. Alert on anomalies including delayed failovers, repeated failures, or performance degradation
+
+---
+
+### 97. How do you handle SQL Server instance restart during failover?
+
+1. Failed node may not shut down gracefully if node is completely unavailable
+2. WSFC allows configured timeout for graceful shutdown before forcing termination
+3. On new active node, SQL Server instance started from scratch going through normal recovery
+4. Recovery may take significant time if database files have many uncommitted transactions
+5. Indirect checkpoints reduce recovery time by throttling dirty pages during normal operation
+6. After recovery completes, database available for new connections
+
+---
+
+### 98. What is the role of linked servers in FCI scenarios?
+
+1. Linked servers allow access to remote databases on other SQL Server instances or data sources
+2. Linked server definitions stored in master database on shared storage available on all nodes
+3. Linked server security credentials configured identically on all nodes
+4. When failover occurs, linked server configuration preserved and queries resume after failover
+5. Long-running queries accessing linked servers may timeout during failover
+6. Test linked server access across failover scenarios validating behavior
+
+---
+
+### 99. How do you manage service account passwords in FCIs?
+
+1. SQL Server service accounts should be domain accounts with passwords synchronized across all nodes
+2. When service account passwords changed, updated on all nodes simultaneously
+3. SQL Server Configuration Manager updates service account passwords on individual nodes
+4. Managed service accounts or group-managed service accounts automatically manage password updates
+5. Procedures ensure service account passwords changed regularly without causing service interruption
+6. Password changes must occur on all nodes before they take effect across cluster
+
+---
+
+### 100. What is the relationship between virtual SQL Server name and virtual network name?
+
+1. Virtual SQL Server name and virtual network name are the same thing in FCI context
+2. Virtual SQL Server name is network identity that clients use to connect to FCI
+3. Name registered in DNS and resolves to active node's IP address
+4. Applications use virtual SQL Server name in connection strings
+5. Server name and network name distinct only in database mirroring and log shipping
+6. Understanding this distinction prevents confusion when configuring FCIs
+
+---
+
+## QUICK REFERENCE
+
+### Best Practices Summary
+
+1. Always maintain odd number of quorum votes in cluster
+2. Use independent storage for witness disk or file share placement
+3. Keep all cluster nodes synchronized with identical configuration
+4. Test failover procedures regularly in non-production environments
+5. Monitor cluster health continuously with automated alerting
+6. Maintain current backups and test recovery procedures regularly
+7. Document all cluster configuration and operational procedures
+8. Use dedicated networks for cluster heartbeat communication
+9. Implement database-level disaster recovery with Availability Groups for critical databases
+10. Review and update disaster recovery procedures based on regular testing
+
+---
+
+**Document Source**: Microsoft Learn official SQL Server documentation  
+**Last Verified**: July 2026  
+**Version**: 1.0
+**Drafted by**: Praveen Madupu
