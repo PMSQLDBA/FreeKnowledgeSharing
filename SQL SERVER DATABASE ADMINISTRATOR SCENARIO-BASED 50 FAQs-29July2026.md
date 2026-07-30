@@ -1599,4 +1599,429 @@ A disaster recovery plan ensures your business can survive data loss or system f
 
 ---
 
+# Additional Realtime Scenario FAQs on DEADLOCKS& DB Blockings.
+
+## DEADLOCKS
+
+### FAQ 1: What causes deadlocks in SQL Server?
+
+Deadlocks occur when two or more processes hold locks on resources that the other processes need. 
+Process A locks Resource 1 and waits for Resource 2, while Process B locks Resource 2 and waits for Resource 1. 
+SQL Server detects this circular wait and terminates one process as the deadlock victim.
+
+Key causes include:
+- Inconsistent lock ordering across transactions
+- Long-running transactions that hold locks
+- Multiple tables accessed in different order by different processes
+- High concurrency with competing resource access
+- Missing or poor index design forcing table scans
+- Implicit conversions causing lock escalation
+
+### FAQ 2: How do you detect and capture deadlock information?
+
+Enable SQL Server trace flags and use Event Notifications to capture deadlock details. Use trace flag 1222 to log deadlock graphs to the SQL Server error log.
+
+Detection methods include:
+- Enable trace flag 1222: DBCC TRACEON (1222, -1)
+- Check SQL Server error log for deadlock information
+- Use Extended Events to capture deadlock_graph event
+- Query sys.dm_exec_requests to identify blocking chains
+- Use SQL Server Profiler with Deadlock Graph event
+- Monitor error log using custom scripts or tools like Redgate
+
+### FAQ 3: What is the difference between deadlock and blocking?
+
+Deadlock occurs when two processes are waiting for each other in a circular dependency, causing SQL Server to terminate one as victim. 
+Blocking happens when one process holds a lock and another waits for that lock without circular dependency.
+
+Key differences:
+- Deadlock involves circular wait; blocking involves linear wait
+- Deadlock self-resolves by terminating victim; blocking continues until first process completes
+- Deadlock happens between two or more processes; blocking is one-way
+- Deadlock graph shows resources involved; blocking chain shows wait hierarchy
+- Deadlock victim receives error 1205; blocked process waits indefinitely
+- Both consume system resources but deadlock is often less harmful if retry logic exists
+
+### FAQ 4: How do you resolve deadlocks caused by index issues?
+
+Poor indexing forces table scans and row-level locks, increasing deadlock probability. 
+Create covering indexes to reduce lock duration and resource competition.
+
+Resolution steps:
+- Identify queries involved in deadlock from deadlock graph
+- Check execution plans for table scans or inefficient access paths
+- Create clustered index on frequently accessed columns
+- Add covering indexes with INCLUDE clause for non-key columns
+- Remove fragmented indexes through rebuild or reorganize
+- Use index hints if query optimizer chooses suboptimal path
+- Monitor query performance post-index creation
+
+### FAQ 5: What is deadlock priority and how does it work?
+
+SQL Server chooses a deadlock victim when circular dependency occurs. 
+By default, SQL Server picks the process causing least rollback cost. 
+Set DEADLOCK_PRIORITY to control victim selection.
+
+How it works:
+- DEADLOCK_PRIORITY ranges from -10 to 10, default is 0
+- Lower priority process becomes victim
+- Set using: SET DEADLOCK_PRIORITY LOW, NORMAL, or HIGH
+- Use -10 or 10 for extreme values
+- Victim process receives error 1205
+- Transaction rolls back automatically
+- Implement retry logic in application for failed transactions
+
+### FAQ 6: How do you handle deadlocks in application code?
+
+Application-level handling reduces deadlock impact through proper retry logic and error handling. 
+Catch error 1205 and implement exponential backoff for retries.
+
+Implementation approach:
+- Wrap transactions in try-catch blocks
+- Check inner exception for error number 1205
+- Implement retry loop with exponential backoff
+- Limit retry attempts to avoid infinite loops
+- Log deadlock occurrences for analysis
+- Use connection pooling to manage session load
+- Consider transactions as atomic retry units
+
+### FAQ 7: What order should you access resources to prevent deadlocks?
+
+Consistent resource access order across all transactions prevents circular dependencies. 
+Always lock resources in same sequence regardless of application flow.
+
+Best practices:
+- Document lock order requirements for application team
+- Access tables in alphabetical or ID-based order
+- Acquire all necessary locks upfront when possible
+- Avoid nested transactions with cross-table access
+- Use lock hints judiciously: (NOLOCK), (UPDLOCK), (SERIALIZABLE)
+- Test transaction isolation levels in development environment
+- Review stored procedure logic for inconsistent access patterns
+
+### FAQ 8: How does isolation level affect deadlock probability?
+
+Isolation level controls lock granularity and hold duration. Higher isolation levels acquire more locks and hold them longer, increasing deadlock risk.
+
+Isolation level impact:
+- READ UNCOMMITTED requires no locks, eliminates deadlocks but allows dirty reads
+- READ COMMITTED acquires locks only when reading, releases after operation
+- REPEATABLE READ holds locks until transaction end, increases deadlock risk
+- SERIALIZABLE uses range locks, highest deadlock probability
+- SNAPSHOT isolation uses row versioning, reduces blocking and deadlocks
+- Lower isolation level reduces deadlock but increases data consistency risk
+- Balance consistency requirements against deadlock probability
+
+### FAQ 9: How do you monitor and troubleshoot real-time deadlocks?
+
+Monitor deadlocks as they occur using Extended Events and dynamic management views. 
+Capture deadlock graphs showing resource and process information.
+
+Monitoring approach:
+- Create Extended Event session capturing deadlock_graph event
+- Query sys.dm_exec_requests and sys.dm_exec_sessions for blocking chains
+- Check sys.dm_tran_locks for lock information
+- Review error log every few minutes during investigation
+- Use third-party tools for continuous monitoring
+- Enable notifications when deadlock threshold exceeded
+- Archive deadlock data for trend analysis
+
+### FAQ 10: What is a deadlock victim and how is it chosen?
+
+Deadlock victim is the process SQL Server terminates to break circular dependency. 
+SQL Server selects victim based on DEADLOCK_PRIORITY and cost of rollback.
+
+Victim selection criteria:
+- Process with DEADLOCK_PRIORITY LOW becomes victim
+- If priorities equal, process causing least rollback cost selected
+- Rollback cost determined by number of log records to undo
+- System processes rarely become victims
+- Short-running transactions have lower rollback cost
+- Batch statements cost more than individual statements
+- Victim receives error 1205 and transaction rolls back completely
+
+## DATABASE BLOCKING
+
+### FAQ 11: What causes database blocking in SQL Server?
+
+Blocking occurs when one process holds a lock and another waits for that lock. 
+Resource contention increases when many users access same data simultaneously.
+
+Common causes:
+- Long-running transactions holding locks
+- Missing indexes forcing table scans
+- Excessive lock escalation
+- Implicit data type conversions in WHERE clause
+- Queries with poor selectivity
+- Uncommitted transactions from disconnected sessions
+- Incorrect transaction isolation level settings
+
+### FAQ 12: How do you identify blocking sessions in real-time?
+
+Use dynamic management views to identify blocking chains showing which sessions block others. Query sys.dm_exec_requests and sys.dm_exec_sessions.
+
+Identification methods:
+- Query sys.dm_exec_requests where session_id is not null
+- Join with sys.dm_exec_sessions to get session details
+- Check wait_resource column for blocked resource name
+- Query sys.dm_tran_locks to view all active locks
+- Use sp_who2 for quick blocking chain overview
+- Enable Extended Events for continuous monitoring
+- Create alert when blocking time exceeds threshold
+
+### FAQ 13: How do you clear or terminate a blocking session?
+
+Kill the blocking session to release held locks. Use KILL command with session ID, but first verify process safety.
+
+Termination steps:
+- Identify blocking session ID using sp_who2
+- Verify session is safe to kill by checking executing query
+- Execute KILL session_id to terminate process
+- Use KILL session_id WITH STATUSONLY to check kill progress
+- Wait for transaction to rollback before reconnecting
+- Implement application retry logic for killed connections
+- Monitor for recurring blocks after killing session
+
+### FAQ 14: How does transaction isolation level impact blocking?
+
+Isolation level determines lock scope and duration. 
+Higher isolation levels hold more locks longer, increasing blocking probability.
+
+Impact analysis:
+- READ UNCOMMITTED avoids locks but allows dirty reads
+- READ COMMITTED acquires locks only during read operation
+- REPEATABLE READ holds locks until transaction end
+- SERIALIZABLE uses range locks for entire transaction
+- SNAPSHOT isolation eliminates blocking through versioning
+- Choose lowest isolation level meeting consistency requirements
+- Test blocking behavior with production-like data volumes
+
+### FAQ 15: What is lock escalation and how does it cause blocking?
+
+Lock escalation converts many row or page locks into fewer table locks when lock threshold exceeded. 
+Escalation reduces lock overhead but may block concurrent users.
+
+Escalation mechanics:
+- SQL Server escalates when lock count exceeds threshold
+- Default threshold varies by memory availability
+- Escalation reduces lock count but increases block scope
+- Table lock blocks all concurrent access to table
+- Disable escalation using ALTER TABLE with LOCK_ESCALATION = NONE
+- Monitor escalation using Extended Events or Profiler
+- Consider impact on concurrent user workload before disabling
+
+### FAQ 16: How does missing index cause blocking?
+
+Missing indexes force full table scans acquiring many locks. 
+Scans hold locks longer than index seeks, increasing blocking probability.
+
+Index impact:
+- Full scan acquires locks on every row in table
+- Index seek acquires locks only on rows matching predicate
+- Add index on frequently searched columns
+- Create covering indexes to avoid bookmark lookups
+- Use INCLUDE clause for non-key columns
+- Monitor index usage using sys.dm_db_index_usage_stats
+- Balance index overhead against blocking reduction
+- Test index changes in development environment
+
+### FAQ 17: What is the difference between shared and exclusive locks?
+
+Shared lock allows multiple readers but prevents writers. 
+Exclusive lock prevents all other access. Lock type determines blocking behavior.
+
+Lock types:
+- Shared (S) lock used for SELECT operations
+- Exclusive (X) lock used for INSERT, UPDATE, DELETE
+- Intent locks signal intention to acquire lock at lower level
+- Lock compatibility determines if locks can coexist
+- Shared locks compatible with other shared locks only
+- Exclusive locks block all other locks
+- Query sys.dm_tran_locks for active lock information
+
+### FAQ 18: How do you use indexes to reduce blocking?
+
+Proper indexing minimizes lock duration and resource access. 
+Efficient queries hold locks shorter, reducing blocking impact.
+
+Indexing strategy:
+- Create indexes on columns used in WHERE clause
+- Build covering indexes to satisfy query from index alone
+- Use filtered indexes for subset of rows
+- Remove duplicate indexes consuming storage
+- Monitor index fragmentation and rebuild when needed
+- Use appropriate data type for indexed columns
+- Test query performance before deploying index
+
+### FAQ 19: How does query optimization reduce blocking?
+
+Optimized queries execute faster and hold locks shorter. 
+Efficient access paths minimize resource contention.
+
+Optimization techniques:
+- Review query execution plan for table scans
+- Add indexes to support query predicates
+- Reduce result set size using appropriate WHERE clause
+- Join tables efficiently using proper join conditions
+- Avoid implicit conversions in WHERE clause
+- Use statistics to help optimizer choose efficient plans
+- Test changes in development environment with production data
+
+### FAQ 20: What role does transaction size play in blocking?
+
+Larger transactions hold locks longer, increasing blocking duration. 
+Keep transactions small and focused.
+
+Transaction considerations:
+- Break large batches into smaller transaction groups
+- Commit frequently to release locks early
+- Avoid user interaction within transaction
+- Remove non-essential operations from transaction
+- Process data in chunks rather than all at once
+- Log long-running transaction start and completion
+- Monitor transaction duration using Extended Events
+
+### FAQ 21: How do you configure lock timeout to manage blocking?
+
+Set lock timeout to terminate blocked processes after specified duration. 
+Prevents indefinite waiting but may interrupt legitimate queries.
+
+Configuration approach:
+- Use sp_configure to set locks configuration
+- Set LOCK_TIMEOUT in application connection string
+- Specify timeout in milliseconds, -1 is infinite
+- Implement timeout in application code
+- Log timeout occurrences for trend analysis
+- Balance timeout against legitimate query duration
+- Consider impact on batch processes
+
+### FAQ 22: What is blocking chain and how do you resolve it?
+
+Blocking chain occurs when Process A blocks B, B blocks C, and C blocks D. 
+Resolving root blocker at top of chain clears entire chain.
+
+Resolution approach:
+- Identify root blocker using sp_who2 or Extended Events
+- Trace blocking chain from victim to original blocker
+- Determine why root blocker holds locks
+- Kill root blocker or wait for completion
+- Implement preventive measures in application
+- Monitor blocking hierarchy regularly
+- Create alerts for blocking chain depth exceeding threshold
+
+### FAQ 23: How does tempdb contention contribute to blocking?
+
+Heavy tempdb usage creates contention when many processes allocate space simultaneously. 
+Tempdb blocking can cascade to application blocking.
+
+Tempdb optimization:
+- Monitor tempdb free space and usage patterns
+- Increase tempdb data files to match CPU count
+- Separate tempdb files across different disk spindles
+- Configure appropriate file size and autogrowth settings
+- Query sys.dm_db_file_space_usage for usage details
+- Reduce temporary object creation in queries
+- Use table variables instead of temp tables when appropriate
+
+### FAQ 24: How do you use sp_who2 to identify blocking issues?
+
+sp_who2 displays current sessions, blocking relationships, and executing commands. 
+Quick tool for blocking investigation.
+
+Using sp_who2:
+- Execute sp_who2 to see all sessions
+- Look for BLKBY column showing blocking session ID
+- Review Status column for SLEEPING, RUNNING, or SUSPENDED
+- Check Command column for executing statement type
+- Identify session holding lock preventing others
+- Note CPU time and physical IO for resource-heavy queries
+- Use alongside Extended Events for detailed investigation
+
+### FAQ 25: How do you implement pessimistic locking to reduce contention?
+
+Pessimistic locking acquires locks upfront before data modification.
+Reduces deadlock risk but may increase blocking.
+
+Implementation strategy:
+- Use UPDLOCK or XLOCK hints to lock rows before update
+- Acquire locks in consistent order across application
+- Implement retry logic for lock acquisition failures
+- Document locking strategy for team understanding
+- Test with concurrent user load
+- Monitor lock contention and adjust strategy
+- Consider optimistic locking alternative using row versions
+
+### FAQ 26: What is optimistic locking and how does it reduce blocking?
+
+Optimistic locking assumes conflicts are rare. 
+Read data without locks, update if version unchanged. 
+Reduces blocking but requires version tracking.
+
+Implementation approach:
+- Add version column (timestamp or integer) to table
+- Read data and version value
+- Check version before updating data
+- Reject update if version changed since read
+- Implement retry logic in application
+- Use SNAPSHOT isolation level for version consistency
+- Log conflicts for analysis
+
+### FAQ 27: How does NOLOCK hint affect blocking behavior?
+
+NOLOCK hint enables dirty reads, avoiding locks entirely. 
+Useful for reporting but may return uncommitted data.
+
+NOLOCK considerations:
+- Query returns data without acquiring shared locks
+- Enables dirty reads of uncommitted transactions
+- Reduces blocking on frequently accessed tables
+- Risk of reading data later rolled back
+- Acceptable for reporting and auditing queries
+- Never use for operational or financial data
+- Consider SNAPSHOT isolation as alternative
+
+### FAQ 28: How do you monitor blocking using Extended Events?
+
+Extended Events provides granular blocking information with minimal overhead. 
+Create session to capture blocking events.
+
+Setup process:
+- Create Extended Event session targeting blocked_process event
+- Set event threshold to capture blocks exceeding duration
+- Collect event data to file or ring buffer
+- Query event data for blocking details
+- Correlate with query execution plans
+- Archive event data for historical analysis
+- Use blocking information for optimization
+
+### FAQ 29: What role does statistics play in blocking-related queries?
+
+Outdated statistics cause inefficient query plans using suboptimal access methods. 
+Recompile statistics to improve query efficiency.
+
+Statistics maintenance:
+- Update statistics on heavily modified tables weekly
+- Use AUTO_UPDATE_STATISTICS to enable automatic updates
+- Query sys.dm_db_stats_properties for last update time
+- Identify stale statistics causing full table scans
+- Manually update if AUTO_UPDATE_STATISTICS insufficient
+- Use FULLSCAN option for accurate statistics on critical tables
+- Test statistics impact on query performance
+
+### FAQ 30: How do you implement monitoring and alerting for blocking issues?
+
+Continuous monitoring detects blocking issues before impact becomes severe. 
+Alert operators to investigate and resolve.
+
+Monitoring implementation:
+- Create job to check blocking every 5 minutes
+- Query sys.dm_exec_requests for wait_duration_ms
+- Alert when blocking exceeds 10 seconds or other threshold
+- Include blocking session details in alert message
+- Capture query text and execution plan for analysis
+- Archive blocking events for trend analysis
+- Correlate blocking with application events and deployments
+- Review monitoring data weekly to identify patterns
+- Implement preventive measures based on findings
+
 END OF FAQ DOCUMENT
