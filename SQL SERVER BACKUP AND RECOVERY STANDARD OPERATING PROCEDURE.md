@@ -199,13 +199,17 @@ RESTORE DATABASE your_db FROM DISK = 'full.bak' WITH RECOVERY;
 Restore from full plus newest differential:
 
 RESTORE DATABASE your_db FROM DISK = 'full.bak' WITH NORECOVERY;
+
 RESTORE DATABASE your_db FROM DISK = 'diff.bak' WITH RECOVERY;
 
 Restore from full, differential, and log backups:
 
 RESTORE DATABASE your_db FROM DISK = 'full.bak' WITH NORECOVERY;
+
 RESTORE DATABASE your_db FROM DISK = 'diff.bak' WITH NORECOVERY;
+
 RESTORE LOG your_db FROM DISK = 'log1.trn' WITH NORECOVERY;
+
 RESTORE LOG your_db FROM DISK = 'log2.trn' WITH RECOVERY;
 
 Use NORECOVERY on all backups except the final one. The final restore uses WITH RECOVERY to bring the database online.
