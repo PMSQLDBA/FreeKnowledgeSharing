@@ -2487,52 +2487,72 @@ Total Questions: 250 across 24 Sections
 
 MariaDB Installation and Initial Setup:
 
-apt-get install mariadb-server
-mariadb-secure-installation
-systemctl start mariadb
-systemctl enable mariadb
+    apt-get install mariadb-server
+    
+    mariadb-secure-installation
+    
+    systemctl start mariadb
+    
+    systemctl enable mariadb
 
 User Management Commands:
 
-CREATE USER 'username'@'hostname' IDENTIFIED BY 'password'
-GRANT SELECT, INSERT ON database.* TO 'user'@'host'
-SHOW GRANTS FOR 'user'@'host'
-DROP USER 'username'@'hostname'
+    CREATE USER 'username'@'hostname' IDENTIFIED BY 'password'
+    
+    GRANT SELECT, INSERT ON database.* TO 'user'@'host'
+    
+    SHOW GRANTS FOR 'user'@'host'
+    
+    DROP USER 'username'@'hostname'
 
 Backup and Recovery:
 
-mariadb-dump -u root -p --all-databases > backup.sql
-mariabackup --backup --target-dir=/path/to/backup
-mariadb < backup.sql
-mysqlbinlog mysql-bin.000001 | mariadb
+    mariadb-dump -u root -p --all-databases > backup.sql
+    
+    mariabackup --backup --target-dir=/path/to/backup
+    
+    mariadb < backup.sql
+    
+    mysqlbinlog mysql-bin.000001 | mariadb
 
 Replication Setup:
 
-CHANGE MASTER TO MASTER_HOST='ip', MASTER_USER='user', MASTER_PASSWORD='pass'
-START SLAVE
-SHOW SLAVE STATUS
-STOP SLAVE
+    CHANGE MASTER TO MASTER_HOST='ip', MASTER_USER='user', MASTER_PASSWORD='pass'
+    
+    START SLAVE
+    
+    SHOW SLAVE STATUS
+    
+    STOP SLAVE
 
 Monitoring and Maintenance:
 
-SHOW PROCESSLIST
-SHOW STATUS LIKE 'pattern'
-SHOW VARIABLES LIKE 'pattern'
-CHECK TABLE table_name
-OPTIMIZE TABLE table_name
-ANALYZE TABLE table_name
+    SHOW PROCESSLIST
+    
+    SHOW STATUS LIKE 'pattern'
+    
+    SHOW VARIABLES LIKE 'pattern'
+    
+    CHECK TABLE table_name
+    
+    OPTIMIZE TABLE table_name
+    
+    ANALYZE TABLE table_name
 
 Performance Analysis:
 
-EXPLAIN SELECT query
-EXPLAIN FORMAT=JSON SELECT query
-SHOW INDEXES FROM table_name
-SELECT table_name, ROUND((data_length+index_length)/1024/1024,2) as size_mb FROM information_schema.tables
+    EXPLAIN SELECT query
+    
+    EXPLAIN FORMAT=JSON SELECT query
+    
+    SHOW INDEXES FROM table_name
+    
+    SELECT table_name, ROUND((data_length+index_length)/1024/1024,2) as size_mb FROM information_schema.tables
 
 ---
 
 Document prepared with information from official MariaDB documentation and verified best practices.
 
-For latest updates, visit: https://mariadb.com/docs/server
-
-Last Updated: August 2026
+  For latest updates, visit: https://mariadb.com/docs/server
+  
+  Last Updated: August 2026
