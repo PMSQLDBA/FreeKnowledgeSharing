@@ -4,7 +4,6 @@ A comprehensive guide covering 250 scenario-based frequently asked questions wit
 
 ---
 
-## Database Administrator (DBA)
 All Sections
 - Start With: Installation (1-6), User Management (7-14), Monitoring (73-84)
 - Progress To: Backup/Recovery (25-36), Replication (37-50), Performance (51-62)
