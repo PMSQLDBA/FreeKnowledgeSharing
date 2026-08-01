@@ -1,8 +1,7 @@
 CockroachDB DATABASE ADMINISTRATION 250 FAQs-1stAug2026
 
-================================================================================
 SECTION 1: CLUSTER SETUP AND INITIALIZATION
-================================================================================
+
 
 Q1: How do I start a single-node CockroachDB cluster for development?
 
