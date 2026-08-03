@@ -1,85 +1,181 @@
-# SQL Server CI/CD Pipeline with GitHub Actions
+# SQL Server CI/CD Pipeline: Execution Location Guide
 
-## What This Project Does
+This guide shows exactly WHERE each command runs and WHICH MACHINE or LOCATION it needs to be executed on.
 
-This project automates SQL Server database deployments. When you push SQL scripts to GitHub, they automatically execute on your SQL Server without manual intervention.
+---
 
-## How It Works
+## Machine Setup Overview
 
-1. You write SQL scripts and push them to GitHub
-2. GitHub detects the push to the main branch
-3. GitHub Actions workflow triggers automatically
-4. Your self-hosted runner (Windows machine) receives the job
-5. SQL scripts execute on your SQL Server database
-6. Results appear in GitHub Actions logs
+You need TWO machines or ONE machine with TWO applications:
 
-## Prerequisites
+Machine 1: Your Windows Computer (Developer Machine)
+- Has: Git, PowerShell, SQL Server Management Studio (SSMS)
+- Purpose: Write code, commit to GitHub, run GitHub Actions runner
 
-Before starting, install these tools on your Windows machine:
+Machine 2: GitHub Cloud (Cloud Service)
+- Has: GitHub Actions, GitHub Repository
+- Purpose: Store code, trigger automated deployments
+- You access it via web browser
 
-- Windows 10 Pro or Windows Server 2019 or later
-- Git (https://git-scm.com/download/win)
-- SQL Server 2019 or later
-- SQL Server Management Studio (SSMS)
-- PowerShell 5.0 or later (built into Windows)
-- GitHub account (free tier works)
+Many people use ONE Windows machine for both roles.
 
-## Step 1: Create SQL Server Login for Deployments
+---
 
-Open SQL Server Management Studio and run this script:
+## PHASE 1: INITIAL SQL SERVER SETUP
+
+These commands run on YOUR WINDOWS MACHINE in SQL Server Management Studio.
+
+### Step 1A: Open SQL Server Management Studio
+
+Location: Your Windows Computer
+
+Application: SQL Server Management Studio (SSMS)
+
+Actions:
+1. Click Start > Search "SQL Server Management Studio"
+2. Open the application
+3. Connect to your local SQL Server (usually "localhost" or "." or your server name)
+4. Click "New Query" button
+
+You now see a blank query window. This is where you type SQL commands.
+
+### Step 1B: Create SQL Login for CI/CD
+
+Location: Your Windows Computer
+Application: SQL Server Management Studio (SSMS)
+Query Window: Where you type SQL
+
+Copy and paste this SQL into the query window:
 
 ```sql
 CREATE LOGIN GitHub_CICD_User WITH PASSWORD = 'YourStrongPassword123!';
 GO
+```
 
+Click Execute (or press F5).
+
+Result: You see "Command(s) completed successfully" message.
+
+### Step 1C: Create Database User and Grant Permissions
+
+Location: Your Windows Computer
+Application: SQL Server Management Studio (SSMS)
+Query Window: Same query window as above
+
+Clear the previous SQL. Copy and paste this SQL:
+
+```sql
 USE YourDatabaseName;
 GO
 
-CREATE USER GitHub_CICD_User FOR LOGIN GitHub_CICD_User;
+CREATE USER Github_CICD_User FOR LOGIN Github_CICD_User;
 GO
 
-ALTER ROLE db_ddladmin ADD MEMBER GitHub_CICD_User;
+ALTER ROLE db_ddladmin ADD MEMBER Github_CICD_User;
 GO
 
 PRINT 'GitHub CI/CD user created successfully';
 GO
 ```
 
-Replace 'YourStrongPassword123!' with a strong password. Write it down, you will need it later.
+Click Execute.
 
-Verify the login works:
+Result: Message shows "GitHub CI/CD user created successfully".
+
+### Step 1D: Test the Login Works
+
+Location: Your Windows Computer
+Application: PowerShell (not SSMS)
+Folder: Any folder (does not matter)
+
+Open PowerShell. Type this command:
 
 ```powershell
-sqlcmd -S localhost -d YourDatabaseName -U GitHub_CICD_User -P YourStrongPassword123! -Q "SELECT @@VERSION;"
+sqlcmd -S localhost -d YourDatabaseName -U Github_CICD_User -P YourStrongPassword123! -Q "SELECT @@VERSION;"
 ```
 
-## Step 2: Create Project Folder Structure
+Press Enter.
 
-Create these folders on your Windows machine:
+Result: You see SQL Server version information printed.
 
-```
-F:\CICDDEMO
-├── Scripts
-│   └── Database
-├── .github
-│   └── workflows
-└── README.md
-```
+If you see an error, the login failed. Go back and check the password is correct.
 
-Use PowerShell to create folders:
+---
+
+## PHASE 2: CREATE PROJECT FOLDER ON YOUR WINDOWS COMPUTER
+
+### Step 2A: Create Project Folder
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: You create a new one
+
+Open PowerShell. Type these commands:
 
 ```powershell
 mkdir F:\CICDDEMO
 cd F:\CICDDEMO
+```
+
+Press Enter.
+
+Result: Folder F:\CICDDEMO is created and you are now inside it.
+
+Verify: Type `dir` and press Enter. Folder should be empty.
+
+### Step 2B: Create Subfolders
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO (you should already be here from Step 2A)
+
+Type these commands:
+
+```powershell
 mkdir Scripts\Database
 mkdir .github\workflows
 ```
 
-## Step 3: Create Your First SQL Script
+Press Enter.
 
-Create file: `Scripts\Database\001_CreateTables.sql`
+Result: Two subfolders are created.
 
-Add this sample SQL:
+Verify: Type `dir` and press Enter. You see:
+
+```
+Mode    Name
+----    ----
+d----   Scripts
+d----   .github
+```
+
+---
+
+## PHASE 3: CREATE SQL SCRIPTS
+
+### Step 3A: Create First SQL Script File
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO (the folder you created in Step 2)
+
+Type this command:
+
+```powershell
+notepad Scripts\Database\001_CreateTables.sql
+```
+
+Press Enter.
+
+Result: Notepad opens with a blank file named 001_CreateTables.sql.
+
+### Step 3B: Add SQL Code to Script
+
+Location: Your Windows Computer
+Application: Notepad
+File: 001_CreateTables.sql (which is now open)
+
+Copy and paste this SQL code into Notepad:
 
 ```sql
 -- Script: 001_CreateTables.sql
@@ -111,65 +207,212 @@ SELECT * FROM dbo.Users;
 GO
 ```
 
-Key points for your SQL scripts:
+Click File > Save.
 
-- Use `IF NOT EXISTS` checks so scripts run multiple times safely
-- Prefix scripts with numbers (001_, 002_, etc.) for execution order
-- Use `GO` statements between batches
-- Include comments explaining what the script does
-- Test scripts manually in SSMS before pushing
+Close Notepad.
 
-## Step 4: Initialize Git Repository
+Result: File 001_CreateTables.sql now exists in F:\CICDDEMO\Scripts\Database folder.
 
-Open PowerShell in your project folder:
+### Step 3C: Test SQL Script Manually
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO
+
+Before pushing to GitHub, test the script to make sure it works.
+
+Type this command:
+
+```powershell
+sqlcmd -S localhost -d YourDatabaseName -U Github_CICD_User -P YourStrongPassword123! -i Scripts\Database\001_CreateTables.sql
+```
+
+Press Enter.
+
+Result: You see SQL output:
+
+```
+Table Users created successfully
+
+(1 rows affected)
+UserID      UserName    Email               CreatedDate
+----------- ----------- ------------------- -----------------------
+1           TestUser    test@example.com    2024-01-15 10:30:00.000
+```
+
+This means the script works. Now you can push it to GitHub.
+
+---
+
+## PHASE 4: INITIALIZE GIT ON YOUR WINDOWS COMPUTER
+
+### Step 4A: Initialize Git Repository
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO (make sure you are here)
+
+Type these commands:
 
 ```powershell
 cd F:\CICDDEMO
-
 git init
+```
 
+Press Enter.
+
+Result: Message shows "Initialized empty Git repository in F:/CICDDEMO/.git/".
+
+### Step 4B: Configure Git Identity
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO
+
+Type these commands:
+
+```powershell
 git config user.name "Your Name"
 git config user.email "your.email@example.com"
+```
 
+Press Enter after each command.
+
+Result: No output. Configuration is saved silently.
+
+### Step 4C: Stage All Files for Commit
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO
+
+Type this command:
+
+```powershell
 git add .
+```
 
+Press Enter.
+
+Result: No output. All files in the folder are now staged.
+
+Verify: Type `git status` and press Enter. You see:
+
+```
+On branch master
+
+No commits yet
+
+Changes to be committed:
+  new file:   Scripts/Database/001_CreateTables.sql
+```
+
+### Step 4D: Create First Commit
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO
+
+Type this command:
+
+```powershell
 git commit -m "Initial commit with SQL scripts"
 ```
 
-## Step 5: Create GitHub Repository
+Press Enter.
 
-Go to https://github.com and sign in.
+Result: Message shows:
 
-Click the + icon (top right) and select "New repository".
+```
+[master (root-commit) 783532b] Initial commit with SQL scripts
+ 1 file changed, 15 insertions(+)
+ create mode 100644 Scripts/Database/001_CreateTables.sql
+```
 
-Configure these settings:
+This means your commit is saved locally.
 
-- Repository name: SQL-CICD-DEMO
-- Description: Automated SQL Server deployment pipeline
-- Visibility: Private
-- Click "Create repository"
+---
 
-GitHub shows setup instructions. Copy the repository URL.
+## PHASE 5: CREATE GITHUB REPOSITORY
 
-## Step 6: Connect Local Folder to GitHub
+### Step 5A: Create Repository on GitHub
 
-In PowerShell, add the remote repository:
+Location: GitHub Website (Cloud)
+Application: Web Browser
+Website: https://github.com
+
+Actions:
+1. Go to https://github.com and sign in
+2. Click + icon (top right corner)
+3. Click "New repository"
+4. Repository name: SQL-CICD-DEMO
+5. Description: Automated SQL Server deployment pipeline
+6. Visibility: Private
+7. Click "Create repository" button
+
+Result: GitHub shows you setup instructions with a URL like:
+```
+https://github.com/YourUsername/SQL-CICD-DEMO.git
+```
+
+Copy this URL. You will use it next.
+
+### Step 5B: Connect Local Folder to GitHub
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO
+
+Type these commands (replace YourUsername with your actual GitHub username):
 
 ```powershell
 git remote add origin https://github.com/YourUsername/SQL-CICD-DEMO.git
-
 git branch -M main
-
 git push -u origin main
 ```
 
-Replace YourUsername with your GitHub username.
+Press Enter after each command.
 
-## Step 7: Create GitHub Actions Workflow
+Result: Files upload to GitHub. You see:
 
-Create file: `.github\workflows\deploy-sql.yml`
+```
+Enumerating objects: 3, done.
+Counting objects: 100% (3/3), done.
+Writing objects: 100% (3/3), 203 bytes | 203.00 KiB/s, done.
+Total 3 (delta 0), reused 0 (delta 0), pack-reused 0
+...
+ * [new branch]      main -> main
+```
 
-Add this content:
+This means your code is now on GitHub.
+
+---
+
+## PHASE 6: CREATE GITHUB ACTIONS WORKFLOW FILE
+
+### Step 6A: Create Workflow File
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO
+
+Type this command:
+
+```powershell
+notepad .github\workflows\deploy-sql.yml
+```
+
+Press Enter.
+
+Result: Notepad opens with a blank file named deploy-sql.yml.
+
+### Step 6B: Add Workflow Configuration
+
+Location: Your Windows Computer
+Application: Notepad
+File: deploy-sql.yml (which is now open)
+
+Copy and paste this YAML code into Notepad:
 
 ```yaml
 name: Deploy SQL Scripts
@@ -216,119 +459,276 @@ jobs:
           }
 ```
 
-Commit and push this file:
+Click File > Save.
+
+Close Notepad.
+
+Result: File deploy-sql.yml now exists in F:\CICDDEMO\.github\workflows folder.
+
+### Step 6C: Commit and Push Workflow File
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO
+
+Type these commands:
 
 ```powershell
 git add .github/workflows/deploy-sql.yml
-
 git commit -m "Add GitHub Actions workflow"
-
 git push origin main
 ```
 
-## Step 8: Add GitHub Repository Secrets
+Press Enter after each command.
 
-GitHub Secrets store your SQL Server credentials securely. GitHub automatically masks these values in logs.
+Result: Workflow file is now on GitHub.
 
-Go to your repository on GitHub:
+---
 
-https://github.com/YourUsername/SQL-CICD-DEMO
+## PHASE 7: ADD GITHUB SECRETS
 
-Click the "Settings" tab.
+These settings store your SQL Server credentials securely on GitHub.
 
-In the left sidebar, click "Secrets and variables" then "Actions".
+### Step 7A: Open GitHub Secrets Page
 
-Click "New repository secret" and add these four secrets:
+Location: GitHub Website (Cloud)
+Application: Web Browser
 
-**Secret 1: SQL Server Host**
+Actions:
+1. Go to https://github.com/YourUsername/SQL-CICD-DEMO
+2. Click "Settings" tab
+3. In left sidebar, click "Secrets and variables"
+4. Click "Actions"
 
-- Name: SQL_SERVER_HOST
-- Value: localhost (or your SQL Server name)
+You now see the Secrets page.
 
-**Secret 2: Database Name**
+### Step 7B: Add SQL Server Host Secret
 
-- Name: SQL_DATABASE
-- Value: YourDatabaseName
+Location: GitHub Website (Cloud)
+Application: Web Browser
+Page: Secrets and variables > Actions
 
-**Secret 3: SQL Username**
+Actions:
+1. Click "New repository secret" button
+2. Name: SQL_SERVER_HOST
+3. Value: localhost (or your SQL Server name)
+4. Click "Add secret" button
 
-- Name: SQL_USERNAME
-- Value: GitHub_CICD_User
+Secret is saved.
 
-**Secret 4: SQL Password**
+### Step 7C: Add Database Name Secret
 
-- Name: SQL_PASSWORD
-- Value: YourStrongPassword123!
+Location: GitHub Website (Cloud)
+Application: Web Browser
+Page: Secrets and variables > Actions
 
-After adding all four secrets, verify they appear in the Secrets list. Click each to confirm the name is correct.
+Actions:
+1. Click "New repository secret" button
+2. Name: SQL_DATABASE
+3. Value: YourDatabaseName
+4. Click "Add secret" button
 
-## Step 9: Download and Install GitHub Self-Hosted Runner
+Secret is saved.
 
-GitHub Actions runs workflows on runners. A self-hosted runner is your Windows machine.
+### Step 7D: Add SQL Username Secret
 
-Go to your repository settings:
+Location: GitHub Website (Cloud)
+Application: Web Browser
+Page: Secrets and variables > Actions
 
-https://github.com/YourUsername/SQL-CICD-DEMO/settings/actions/runners
+Actions:
+1. Click "New repository secret" button
+2. Name: SQL_USERNAME
+3. Value: Github_CICD_User
+4. Click "Add secret" button
 
-Click "New self-hosted runner".
+Secret is saved.
 
-Select:
-- Operating System: Windows
-- Architecture: x64
+### Step 7E: Add SQL Password Secret
 
-Download the ZIP file.
+Location: GitHub Website (Cloud)
+Application: Web Browser
+Page: Secrets and variables > Actions
 
-Extract the ZIP file to:
+Actions:
+1. Click "New repository secret" button
+2. Name: SQL_PASSWORD
+3. Value: YourStrongPassword123!
+4. Click "Add secret" button
+
+Secret is saved.
+
+Verify: On the Secrets page, you now see four secrets listed:
+- SQL_SERVER_HOST
+- SQL_DATABASE
+- SQL_USERNAME
+- SQL_PASSWORD
+
+---
+
+## PHASE 8: DOWNLOAD GITHUB ACTIONS RUNNER
+
+### Step 8A: Go to Runners Page
+
+Location: GitHub Website (Cloud)
+Application: Web Browser
+
+Actions:
+1. Go to https://github.com/YourUsername/SQL-CICD-DEMO
+2. Click "Settings" tab
+3. In left sidebar, click "Actions" > "Runners"
+4. Click "New self-hosted runner" button
+
+You now see the Runner setup page.
+
+### Step 8B: Select Runner Configuration
+
+Location: GitHub Website (Cloud)
+Application: Web Browser
+Page: Runner setup
+
+Actions:
+1. Operating System: Select "Windows"
+2. Architecture: Select "x64"
+
+You now see a download button.
+
+### Step 8C: Download Runner ZIP File
+
+Location: GitHub Website (Cloud)
+Application: Web Browser
+
+Actions:
+1. Click the download link
+2. Save the ZIP file to Downloads folder
+
+File name: actions-runner-win-x64-2.336.0.zip (version number may be different)
+
+### Step 8D: Extract Runner to Folder
+
+Location: Your Windows Computer
+Application: File Explorer or PowerShell
+
+Actions using PowerShell:
+
+```powershell
+cd C:\
+mkdir GitHub-Runner
+cd GitHub-Runner
+```
+
+Then extract the ZIP file into C:\GitHub-Runner folder.
+
+You can also use File Explorer:
+1. Open File Explorer
+2. Go to C:\ drive
+3. Create new folder "GitHub-Runner"
+4. Extract the ZIP file into this folder
+
+Result: Folder C:\GitHub-Runner contains runner files.
+
+---
+
+## PHASE 9: CONFIGURE GITHUB ACTIONS RUNNER
+
+### Step 9A: Get Configuration Token
+
+Location: GitHub Website (Cloud)
+Application: Web Browser
+Page: Runner setup
+
+After downloading, GitHub shows you a token like:
 
 ```
-C:\GitHub-Runner
+AAAA...BBBB...CCCC
 ```
 
-## Step 10: Configure and Start the Runner
+Copy this token. You will use it in the next step.
 
-Open PowerShell as Administrator:
+### Step 9B: Run Configuration Script
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: C:\GitHub-Runner
+
+Type these commands:
 
 ```powershell
 cd C:\GitHub-Runner
-```
-
-Run the configuration script:
-
-```powershell
 .\config.cmd
 ```
 
-When prompted, enter:
+Press Enter.
 
-- GitHub URL: https://github.com
-- Token: (paste the token from the GitHub settings page)
-- Runner name: sql-server-runner
-- Work folder: (press Enter to accept default)
+Result: Configuration wizard starts. You see prompts:
 
-Configuration completes. Now start the runner:
+```
+|GitHub Actions Runner Configuration|
+
+Enter name of work folder: (press Enter for default)
+```
+
+Actions:
+1. GitHub URL prompt: Type https://github.com and press Enter
+2. Token prompt: Paste the token from GitHub and press Enter
+3. Runner name prompt: Type sql-server-runner and press Enter
+4. Work folder prompt: Press Enter to accept default
+
+Result: Configuration completes with message "Settings Saved".
+
+### Step 9C: Start the Runner
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: C:\GitHub-Runner
+
+Type this command:
 
 ```powershell
 .\run.cmd
 ```
 
-Wait for this message:
+Press Enter.
+
+Result: Runner starts and shows:
 
 ```
+|GitHub Actions Runner|
+
 Listening for Jobs
 ```
 
-Keep this PowerShell window open. The runner is now active and listening for deployment jobs.
+Keep this PowerShell window open. Do not close it.
 
-## Step 11: Test the Pipeline
+This window must stay open for GitHub Actions to send jobs to your machine.
 
-Create a new SQL script:
+---
+
+## PHASE 10: TEST THE PIPELINE
+
+### Step 10A: Create a New SQL Script
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO
+
+Type this command:
 
 ```powershell
-cd F:\CICDDEMO
 notepad Scripts\Database\002_CreateOrders.sql
 ```
 
-Add this SQL:
+Press Enter.
+
+Result: Notepad opens.
+
+### Step 10B: Add SQL Code
+
+Location: Your Windows Computer
+Application: Notepad
+File: 002_CreateOrders.sql
+
+Copy and paste this SQL:
 
 ```sql
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Orders')
@@ -348,27 +748,67 @@ END
 GO
 ```
 
-Commit and push:
+Click File > Save.
+
+Close Notepad.
+
+### Step 10C: Test Script Manually (Optional)
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO
+
+Type this command:
+
+```powershell
+sqlcmd -S localhost -d YourDatabaseName -U Github_CICD_User -P YourStrongPassword123! -i Scripts\Database\002_CreateOrders.sql
+```
+
+Press Enter.
+
+Result: You see "Table Orders created successfully". Script works.
+
+### Step 10D: Commit and Push to GitHub
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO
+
+Type these commands:
 
 ```powershell
 git add Scripts\Database\002_CreateOrders.sql
-
 git commit -m "Add Orders table"
-
 git push origin main
 ```
 
-Go to GitHub Actions:
+Press Enter after each command.
 
-https://github.com/YourUsername/SQL-CICD-DEMO/actions
+Result: File is pushed to GitHub.
 
-Watch the workflow run. You should see:
+### Step 10E: Watch GitHub Actions Run
 
+Location: GitHub Website (Cloud)
+Application: Web Browser
+
+Actions:
+1. Go to https://github.com/YourUsername/SQL-CICD-DEMO
+2. Click "Actions" tab
+3. You see a workflow run with your commit message "Add Orders table"
+4. Click on the workflow to see progress
+
+Result: You see three steps running:
 - Checkout code (green checkmark)
 - Test SQL Connection (green checkmark)
-- Execute SQL Scripts (green checkmark)
+- Execute SQL Scripts (green checkmark with script names)
 
-In your PowerShell runner window, you will see:
+### Step 10F: Monitor Runner Window
+
+Location: Your Windows Computer
+Application: PowerShell (the runner window)
+Window: The one showing "Listening for Jobs"
+
+You should see output:
 
 ```
 Running job: deploy
@@ -377,19 +817,46 @@ Executing: 002_CreateOrders.sql
 Job deploy completed with result: Succeeded
 ```
 
-Open SQL Server Management Studio and verify both tables exist in your database.
+### Step 10G: Verify in SQL Server
 
-## Step 12: Daily Usage
+Location: Your Windows Computer
+Application: SQL Server Management Studio
 
-To add new SQL scripts:
+Actions:
+1. Open SSMS
+2. Connect to your SQL Server
+3. Expand Databases > YourDatabaseName > Tables
+4. Refresh (press F5)
+5. You should see:
+   - dbo.Users table (from script 1)
+   - dbo.Orders table (from script 2)
 
-1. Create a new file in Scripts\Database with a version prefix
+Both tables were automatically created by GitHub Actions.
+
+---
+
+## PHASE 11: DAILY WORKFLOW
+
+### Step 11A: Create New SQL Script Locally
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO
+
+Type this command:
 
 ```powershell
 notepad Scripts\Database\003_AddStoredProcedures.sql
 ```
 
-2. Write your SQL code
+Press Enter.
+
+### Step 11B: Write Your SQL Code
+
+Location: Your Windows Computer
+Application: Notepad
+
+Write your SQL code. Example:
 
 ```sql
 IF NOT EXISTS (SELECT * FROM sys.objects WHERE type = 'P' AND name = 'sp_GetUsers')
@@ -401,348 +868,91 @@ BEGIN
     END'
     PRINT 'Stored procedure sp_GetUsers created'
 END
-ELSE
-BEGIN
-    PRINT 'Stored procedure sp_GetUsers already exists'
-END
 GO
 ```
 
-3. Test the script manually in SSMS
+Save the file.
 
-4. Commit and push
+### Step 11C: Test Locally (Optional but Recommended)
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO
+
+Type this command:
+
+```powershell
+sqlcmd -S localhost -d YourDatabaseName -U Github_CICD_User -P YourStrongPassword123! -i Scripts\Database\003_AddStoredProcedures.sql
+```
+
+Press Enter.
+
+If it works locally, it will work in GitHub Actions.
+
+### Step 11D: Commit and Push
+
+Location: Your Windows Computer
+Application: PowerShell
+Folder: F:\CICDDEMO
+
+Type these commands:
 
 ```powershell
 git add Scripts\Database\003_AddStoredProcedures.sql
-
 git commit -m "Add stored procedures"
-
 git push origin main
 ```
 
-5. GitHub Actions automatically deploys the script
+Press Enter after each command.
 
-## Folder Organization
+### Step 11E: GitHub Actions Automatically Runs
 
-Keep your project folder simple and organized:
+Location: GitHub Website (Cloud)
+Application: Web Browser
+Action: Automatic (no manual action needed)
 
-```
-SQL-CICD-DEMO
-├── Scripts
-│   └── Database
-│       ├── 001_CreateTables.sql
-│       ├── 002_CreateOrders.sql
-│       └── 003_AddStoredProcedures.sql
-├── .github
-│   └── workflows
-│       └── deploy-sql.yml
-└── README.md
-```
+When you push code, GitHub Actions automatically:
+1. Detects the push
+2. Sends the job to your runner
+3. Runner executes the SQL scripts
+4. Results appear in the Actions tab
 
-Scripts execute in alphabetical order. Use numbered prefixes to control execution order.
-
-## Script Best Practices
-
-Write scripts that are idempotent (safe to run multiple times):
-
-```sql
--- Good: Uses IF NOT EXISTS
-IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Users')
-BEGIN
-    CREATE TABLE Users (UserID INT PRIMARY KEY)
-END
-GO
-
--- Bad: Fails on second run
-CREATE TABLE Users (UserID INT PRIMARY KEY)
-GO
-```
-
-Include comments explaining the purpose:
-
-```sql
--- Script: 001_CreateTables.sql
--- Purpose: Create base tables for user management
--- Author: Your Name
--- Date: 2024-01-15
-```
-
-Use GO statements to separate batches:
-
-```sql
-CREATE TABLE Users (UserID INT PRIMARY KEY)
-GO
-
-INSERT INTO Users VALUES (1)
-GO
-
-SELECT * FROM Users
-GO
-```
-
-Always test scripts manually before pushing to GitHub:
-
-```powershell
-sqlcmd -S localhost -d YourDatabaseName -U GitHub_CICD_User -P YourPassword -i Scripts\Database\001_CreateTables.sql
-```
-
-## Monitoring Deployments
-
-Go to your repository on GitHub:
-
-https://github.com/YourUsername/SQL-CICD-DEMO
-
-Click the "Actions" tab.
-
-You see all workflow runs with timestamps and status:
-
-- Green checkmark: Deployment succeeded
-- Red X: Deployment failed
-- Yellow circle: Deployment in progress
-
-Click a workflow run to see details:
-
-- Checkout code
-- Test SQL Connection
-- Execute SQL Scripts
-
-Click "Execute SQL Scripts" to see which scripts ran and any SQL output.
-
-## Troubleshooting
-
-### Runner Shows Offline
-
-The self-hosted runner is not running on your Windows machine.
-
-Solution: Open PowerShell and start it:
-
-```powershell
-cd C:\GitHub-Runner
-.\run.cmd
-```
-
-Wait for "Listening for Jobs". Keep this window open.
-
-### SQL Connection Failed
-
-The workflow cannot connect to your SQL Server.
-
-Solutions:
-
-1. Test the connection manually:
-
-```powershell
-sqlcmd -S localhost -d YourDatabaseName -U GitHub_CICD_User -P YourPassword -Q "SELECT @@VERSION;"
-```
-
-2. Check GitHub secrets:
-
-Go to Settings > Secrets > Actions. Verify all four secrets exist and spellings are correct.
-
-3. Check firewall:
-
-Windows Firewall might block SQL connections. Open Windows Defender Firewall and allow SQL Server.
-
-4. Verify SQL Server is running:
-
-Open SQL Server Management Studio and connect to your server.
-
-### Permission Denied Error
-
-The GitHub_CICD_User account lacks required permissions.
-
-Solution: Grant proper permissions:
-
-```sql
-USE YourDatabaseName
-GO
-
-ALTER ROLE db_ddladmin ADD MEMBER GitHub_CICD_User
-GO
-```
-
-### Script Execution Error
-
-A SQL script contains errors or references missing objects.
-
-Solutions:
-
-1. Download the workflow log:
-
-Go to Actions > Click the failed workflow > Click "Execute SQL Scripts" > Scroll down and click the download icon.
-
-2. Review the SQL error message in the log.
-
-3. Test the script manually in SSMS:
-
-```powershell
-sqlcmd -S localhost -d YourDatabaseName -U GitHub_CICD_User -P YourPassword -i Scripts\Database\001_CreateTables.sql
-```
-
-4. Fix the script and push again.
-
-### No Runners Found
-
-GitHub Actions shows "No runners found" error.
-
-Solutions:
-
-1. Check if the runner PowerShell window is still open.
-
-2. Restart the runner:
-
-```powershell
-cd C:\GitHub-Runner
-.\run.cmd
-```
-
-3. Check Windows Event Viewer for errors.
-
-4. Verify internet connection on your Windows machine.
-
-## Common Git Commands
-
-Check status of your files:
-
-```powershell
-git status
-```
-
-Stage changes for commit:
-
-```powershell
-git add .
-```
-
-Commit changes:
-
-```powershell
-git commit -m "Your message describing what changed"
-```
-
-Push to GitHub:
-
-```powershell
-git push origin main
-```
-
-Pull latest from GitHub:
-
-```powershell
-git pull origin main
-```
-
-View commit history:
-
-```powershell
-git log
-```
-
-Create a new branch:
-
-```powershell
-git checkout -b feature-branch
-```
-
-Switch branches:
-
-```powershell
-git checkout main
-```
-
-Merge a branch:
-
-```powershell
-git merge feature-branch
-```
-
-## Security Considerations
-
-Never commit passwords or credentials to Git. GitHub automatically scans for exposed credentials and disables them.
-
-Use GitHub Secrets for all sensitive information. Secrets are masked in logs and cannot be viewed after creation.
-
-Create a dedicated SQL login (GitHub_CICD_User) for deployments. Do not reuse production database admin accounts.
-
-Use strong passwords. Generate random passwords at least 15 characters long with uppercase, lowercase, numbers, and symbols.
-
-Rotate passwords every 90 days.
-
-Restrict SQL login permissions to db_ddladmin role minimum. Do not grant sysadmin role.
-
-Monitor GitHub Actions logs regularly for failed deployments or suspicious activity.
-
-## Performance Tips
-
-Keep SQL scripts small and focused on one change per script.
-
-Test scripts locally before pushing to GitHub.
-
-Use indexes on large tables to improve query performance.
-
-Batch insert operations when importing large datasets.
-
-Monitor execution time in GitHub Actions logs.
-
-Clean up old SQL scripts periodically.
-
-## Architecture
-
-Component Breakdown
-
-Visual Studio or VS Code: Edit SQL scripts and manage local files.
-
-Git: Tracks file changes, manages commits, maintains version history.
-
-GitHub: Cloud repository stores your code, provides backup, triggers workflows.
-
-GitHub Actions: Automation platform executes workflows when you push code.
-
-Self-Hosted Runner: Your Windows machine executes jobs, has direct access to SQL Server.
-
-SQL Server: Database server receives and executes SQL scripts.
-
-Data Flow
-
-1. You create or modify SQL scripts locally
-2. You commit and push changes to GitHub
-3. GitHub detects push to main branch
-4. GitHub Actions workflow triggers automatically
-5. Job is sent to self-hosted runner on your Windows machine
-6. Runner downloads latest code from GitHub
-7. PowerShell executes SQL scripts using sqlcmd utility
-8. sqlcmd connects to SQL Server using stored credentials
-9. SQL scripts execute on your database
-10. Results and logs return to GitHub Actions
-11. You review results in GitHub Actions tab
-
-## Next Steps
-
-1. Complete all setup steps above
-2. Create your first SQL script and test
-3. Monitor GitHub Actions logs after each push
-4. Add more SQL scripts as your project grows
-5. Set up email notifications in GitHub (optional)
-6. Implement approval gates for production deployments (advanced)
-
-## Support
-
-For GitHub Actions documentation: https://docs.github.com/en/actions
-
-For SQL Server documentation: https://learn.microsoft.com/en-us/sql/
-
-For Git documentation: https://git-scm.com/doc
-
-For GitHub self-hosted runners: https://docs.github.com/en/actions/hosting-your-own-runners
-
-## Questions or Issues
-
-1. Review the Troubleshooting section above
-2. Check GitHub Actions logs for detailed error messages
-3. Test SQL connections manually using sqlcmd
-4. Verify all GitHub secrets are correctly spelled
-5. Ensure runner is online and listening for jobs
+You just watch it happen.
 
 ---
 
-Maintained By: SQL-CICD-DEMO Project Team
+## SUMMARY: LOCATION MAPPING
+
+Here is where each phase runs:
+
+| Phase | Name | Location | Application | Machine |
+|-------|------|----------|-------------|---------|
+| 1 | SQL Setup | SSMS + PowerShell | SQL Server Management Studio, PowerShell | Your Windows Computer |
+| 2 | Create Folders | PowerShell | PowerShell | Your Windows Computer |
+| 3 | Create SQL Scripts | Notepad + PowerShell | Notepad, PowerShell | Your Windows Computer |
+| 4 | Initialize Git | PowerShell | PowerShell | Your Windows Computer |
+| 5 | GitHub Repository | Web Browser | GitHub Website | Cloud (Internet) |
+| 6 | Workflow File | Notepad + PowerShell | Notepad, PowerShell | Your Windows Computer |
+| 7 | GitHub Secrets | Web Browser | GitHub Website | Cloud (Internet) |
+| 8 | Download Runner | Web Browser | GitHub Website | Cloud (Internet) |
+| 9 | Configure Runner | PowerShell | PowerShell | Your Windows Computer |
+| 10 | Test Pipeline | PowerShell + Web Browser + SSMS | Multiple | Your Windows Computer + Cloud |
+| 11 | Daily Usage | PowerShell + Web Browser | PowerShell, Web Browser | Your Windows Computer + Cloud |
+
+---
+
+## KEY POINTS TO REMEMBER
+
+Your Windows Computer runs:
+- SQL Server Management Studio (SSMS) for database work
+- PowerShell for Git commands
+- GitHub Actions Runner (always listening)
+
+GitHub Cloud runs:
+- Your code repository
+- GitHub Actions automation
+- Workflow execution orchestration
+
+When you push code from PowerShell, GitHub detects it, sends a job to your runner, which executes SQL scripts on your local SQL Server database.
+
+The runner must stay running 24/7 for automatic deployments. If you close the PowerShell window, GitHub Actions cannot run jobs.
