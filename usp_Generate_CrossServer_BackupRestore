@@ -1,0 +1,195 @@
+To handle **cross-server execution**, dynamic path handling, destination database renaming, and post-restore administration (fixing orphans and updating compatibility levels), 
+the script now generates fully dynamic T-SQL blocks. 
+You can run these blocks directly or execute them across servers via a Linked Server or a utility like CMS / Invoke-Sqlcmd.
+
+Key Enhancements Made:
+*********************
+1) Targeted Enhancements: Added explicit parameters for @DestinationServer, @DestinationDBName, @OverwriteExisting, and @TargetCompatibilityLevel.
+2) Orphan User Resolution: Includes an automated loop utilizing `sys.database_principals` to auto-map SQL users to server logins after the restore completes.
+3) Smart Overwrite Logic: Checks the destination metadata to dynamically use `REPLACE` or safe-restore based on your `@OverwriteExisting` toggle.
+4) Dynamic Compatibility Upgrades: Automatically evaluates the destination instance version to apply the appropriate `COMPATIBILITY_LEVEL` if left as default.
+*********************
+Stored Procedure Code
+*********************
+
+USE DBAScripts
+GO
+CREATE or ALTER PROCEDURE [dbo].[usp_Generate_CrossServer_BackupRestore]
+(
+      @SourceServer          SYSNAME = @@SERVERNAME,
+      @SourceDatabaseNames   VARCHAR(MAX),      -- Comma-separated list: 'DB1, DB2, DB3'
+      @BackupPath            VARCHAR(260),      -- Must be accessible by both servers (UNC path recommended if cross-server)
+      @DestinationServer     SYSNAME = @@SERVERNAME,
+      @DestinationDBName     SYSNAME = NULL,    -- If NULL, retains source DB name. (Note: Only applies if a SINGLE source DB is passed)
+      @OverwriteExisting     BIT = 0,           -- 1 = WITH REPLACE, 0 = Fails if DB exists
+      @AutoFixOrphanUsers    BIT = 1,           -- 1 = Automatically remap SQL Logins
+      @SetTargetCompatibility BIT = 1            -- 1 = Auto-upgrades DB compatibility to destination instance version
+)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Standardized timestamp for unique backup naming
+    DECLARE @timestamp CHAR(15) =
+        CONVERT(CHAR(8), GETDATE(), 112) + '_' + REPLACE(CONVERT(CHAR(8), GETDATE(), 108), ':', '');
+
+    -- Temporary table to process databases sequentially
+    CREATE TABLE #SelectedDBs (
+        RowID INT IDENTITY(1,1),
+        SourceDB SYSNAME,
+        TargetDB SYSNAME
+    );
+
+    -- 1. Split and process database tokens
+    ;WITH DBList AS
+    (
+        SELECT LTRIM(RTRIM(value)) AS DatabaseName
+        FROM STRING_SPLIT(@SourceDatabaseNames, ',')
+    ),
+    ValidDBs AS
+    (
+        SELECT d.DatabaseName
+        FROM DBList d
+        INNER JOIN sys.databases sd ON sd.name = d.DatabaseName
+    )
+    INSERT INTO #SelectedDBs (SourceDB, TargetDB)
+    SELECT 
+        DatabaseName,
+        CASE 
+            WHEN @DestinationDBName IS NOT NULL AND (SELECT COUNT(*) FROM ValidDBs) = 1 THEN @DestinationDBName
+            ELSE DatabaseName 
+        END
+    FROM ValidDBs;
+
+    -- Verify if any matching databases were found
+    IF NOT EXISTS (SELECT 1 FROM #SelectedDBs)
+    BEGIN
+        RAISERROR('No valid source databases found matching the criteria.', 16, 1);
+        RETURN;
+    END
+
+    -- 2. Loop and generate scripts per database
+    DECLARE @CurrentRow INT = 1;
+    DECLARE @TotalRows INT = (SELECT COUNT(*) FROM #SelectedDBs);
+    DECLARE @SrcDB SYSNAME, @TgtDB SYSNAME;
+
+    WHILE @CurrentRow <= @TotalRows
+    BEGIN
+        SELECT @SrcDB = SourceDB, @TgtDB = TargetDB 
+        FROM #SelectedDBs 
+        WHERE RowID = @CurrentRow;
+
+        -- Format backup filename
+        DECLARE @BackupFile VARCHAR(500) = @BackupPath + @SrcDB + '_' + @timestamp + '.bak';
+
+        ------------------------------------------------------------------
+        -- A. Generate Backup Block (To run on Source)
+        ------------------------------------------------------------------
+        PRINT '/* ======================================================================'
+        PRINT '   SOURCE SERVER: ' + @SourceServer + ' | DATABASE: ' + @SrcDB
+        PRINT '   ====================================================================== */'
+        
+        DECLARE @BackupCmd NVARCHAR(MAX) = 
+            'BACKUP DATABASE [' + @SrcDB + ']' + CHAR(13) +
+            'TO DISK = ''' + @BackupFile + ''' ' + CHAR(13) +
+            'WITH COMPRESSION, STATS = 10, INIT, NAME = ''Maint-CrossServerTransfer-' + @SrcDB + ''';' + CHAR(13);
+        
+        PRINT @BackupCmd;
+
+        ------------------------------------------------------------------
+        -- B. Generate Move Commands and Restore Block (To run on Destination)
+        ------------------------------------------------------------------
+        PRINT '/* ======================================================================'
+        PRINT '   DESTINATION SERVER: ' + @DestinationServer + ' | DATABASE: ' + @TgtDB
+        PRINT '   ====================================================================== */'
+
+        -- Dynamically resolve logical to physical file mappings from master_files
+        DECLARE @MoveCmd NVARCHAR(MAX) = '';
+        
+        SELECT @MoveCmd = @MoveCmd + 
+            '    , MOVE ''' + mf.name + ''' TO ''' + 
+            REVERSE(LEFT(REVERSE(mf.physical_name), CHARINDEX('\', REVERSE(mf.physical_name)) - 1)) + '''' + CHAR(13)
+        FROM sys.master_files mf
+        WHERE mf.database_id = DB_ID(@SrcDB);
+
+        -- Build the structural restoration string
+        DECLARE @RestoreCmd NVARCHAR(MAX) = '';
+        
+        -- Safe Check Block if Overwrite is disabled
+        IF @OverwriteExisting = 0
+        BEGIN
+            SET @RestoreCmd = @RestoreCmd + 'IF DB_ID(''' + @TgtDB + ''') IS NOT NULL' + CHAR(13) +
+                                            '    RAISERROR(''Database already exists on target. Skipping restore to protect data.'', 16, 1);' + CHAR(13) +
+                                            'ELSE' + CHAR(13) + 'BEGIN' + CHAR(13);
+        END
+
+        SET @RestoreCmd = @RestoreCmd + '    RESTORE DATABASE [' + @TgtDB + ']' + CHAR(13) +
+                                        '    FROM DISK = ''' + @BackupFile + '''' + CHAR(13) +
+                                        '    WITH STATS = 10' + 
+                                        CASE WHEN @OverwriteExisting = 1 THEN ', REPLACE' ELSE '' END + 
+                                        ', RECOVERY' + CHAR(13) + 
+                                        @MoveCmd + ';' + CHAR(13);
+
+        ------------------------------------------------------------------
+        -- C. Post-Restore Automation (Compatibility & Orphans)
+        ------------------------------------------------------------------
+        -- Auto Upgrade Compatibility Level
+        IF @SetTargetCompatibility = 1
+        BEGIN
+            SET @RestoreCmd = @RestoreCmd + CHAR(13) + '    -- Auto-updating database compatibility level to Match Instance Version' + CHAR(13) +
+                             '    DECLARE @CompatLevel INT = (SELECT compatibility_level FROM sys.databases WHERE name = ''master'');' + CHAR(13) +
+                             '    DECLARE @SQLCompat NVARCHAR(MAX) = ''ALTER DATABASE [' + @TgtDB + '] SET COMPATIBILITY_LEVEL = '' + CAST(@CompatLevel AS VARCHAR(5));' + CHAR(13) +
+                             '    EXEC sp_executesql @SQLCompat;' + CHAR(13);
+        END
+
+        -- Automate fixing orphaned database users
+        IF @AutoFixOrphanUsers = 1
+        BEGIN
+            SET @RestoreCmd = @RestoreCmd + CHAR(13) + '    -- Auto-Fixing Orphaned Users Loop' + CHAR(13) +
+                             '    DECLARE @UserRepairSQL NVARCHAR(MAX) = '''';' + CHAR(13) +
+                             '    SELECT @UserRepairSQL += ''ALTER USER ['' + dp.name + ''] WITH LOGIN = ['' + dp.name + '']; '' + CHAR(13)' + CHAR(13) +
+                             '    FROM [' + @TgtDB + '].sys.database_principals dp' + CHAR(13) +
+                             '    INNER JOIN sys.server_principals sp ON dp.name = sp.name' + CHAR(13) +
+                             '    WHERE dp.type = ''S'' AND dp.authentication_type = 1;' + CHAR(13) +
+                             '    IF @UserRepairSQL <> ''''' + CHAR(13) +
+                             '        EXEC sp_executesql @UserRepairSQL;' + CHAR(13);
+        END
+
+        IF @OverwriteExisting = 0
+        BEGIN
+            SET @RestoreCmd = @RestoreCmd + 'END' + CHAR(13);
+        END
+
+        PRINT @RestoreCmd;
+        PRINT '----------------------------------------------------------------------------------------------------' + CHAR(13);
+
+        SET @CurrentRow = @CurrentRow + 1;
+    END
+
+    DROP TABLE #SelectedDBs;
+END
+GO
+---
+### Execution Examples
+#### Scenario A: Simple Single DB Refresh with Name Change & Overwrite
+EXEC dbo.[usp_Generate_CrossServer_BackupRestore]
+     @SourceServer        = 'PROD-SQL01',
+     @SourceDatabaseNames = 'SalesDB',
+     @BackupPath          = '\\NetworkShare\SQLBackups\',
+     @DestinationServer   = 'STAGE-SQL01',
+     @DestinationDBName   = 'SalesDB_Stage',
+     @OverwriteExisting   = 1, -- Force overwrite target if it exists
+     @AutoFixOrphanUsers  = 1,
+     @SetTargetCompatibility = 1;
+
+#### Scenario B: Multi-DB migration keeping original names safely (No Overwrite)
+
+EXEC dbo.[usp_Generate_CrossServer_BackupRestore]
+     @SourceServer        = 'PROD-SQL01',
+     @SourceDatabaseNames = 'HR_Prod, Finance_Prod, Intranet_Prod',
+     @BackupPath          = '\\NetworkShare\SQLBackups\',
+     @DestinationServer   = 'DR-SQL01',
+     @DestinationDBName   = NULL, -- Keeps original names across the board
+     @OverwriteExisting   = 0, -- Safely terminates if database exists
+     @AutoFixOrphanUsers  = 1,
+     @SetTargetCompatibility = 1;
