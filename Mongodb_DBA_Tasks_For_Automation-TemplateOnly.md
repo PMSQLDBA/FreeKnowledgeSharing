@@ -295,16 +295,16 @@
 
 | No    | Activity                     | Automation |
 | ----- | ---------------------------- | ---------- |
-| 15.1  | Cluster Availability Check   | Automated  |
-| 15.2  | Replica Health Validation    | Automated  |
-| 15.3  | Backup Validation            | Automated  |
-| 15.4  | Replication Lag Check        | Automated  |
-| 15.5  | Disk Space Monitoring        | Automated  |
-| 15.6  | CPU / Memory Monitoring      | Automated  |
-| 15.7  | Slow Query Detection         | Automated  |
-| 15.8  | Failed Authentication Review | Automated  |
-| 15.9  | Error Log Monitoring         | Automated  |
-| 15.10 | Daily MongoDB Health Report  | Automated  |
+| 15.1  | Cluster Availability Check   |            |
+| 15.2  | Replica Health Validation    |            |
+| 15.3  | Backup Validation            |            |
+| 15.4  | Replication Lag Check        |            |
+| 15.5  | Disk Space Monitoring        |            |
+| 15.6  | CPU / Memory Monitoring      |            |
+| 15.7  | Slow Query Detection         |            |
+| 15.8  | Failed Authentication Review |            |
+| 15.9  | Error Log Monitoring         |            |
+| 15.10 | Daily MongoDB Health Report  |            |
 
 ---
 
@@ -312,12 +312,12 @@
 
 | No    | Activity                   | Automation |
 | ----- | -------------------------- | ---------- |
-| 15.11 | Index Usage Review         | Automated  |
-| 15.12 | Collection Growth Analysis | Automated  |
-| 15.13 | Performance Trend Report   | Automated  |
-| 15.14 | Configuration Drift Review | Automated  |
-| 15.15 | Security Access Review     | Automated  |
-| 15.16 | Backup Recovery Validation | Automated  |
+| 15.11 | Index Usage Review         |            |
+| 15.12 | Collection Growth Analysis |            |
+| 15.13 | Performance Trend Report   |            |
+| 15.14 | Configuration Drift Review |            |
+| 15.15 | Security Access Review     |            |
+| 15.16 | Backup Recovery Validation |            |
 
 ---
 
@@ -325,11 +325,11 @@
 
 | No    | Activity                     | Automation |
 | ----- | ---------------------------- | ---------- |
-| 15.17 | Capacity Planning Report     | Automated  |
-| 15.18 | Database Growth Forecast     | Automated  |
-| 15.19 | User Access Audit            | Automated  |
-| 15.20 | Index Optimization Review    | Automated  |
-| 15.21 | Cluster Configuration Review | Automated  |
+| 15.17 | Capacity Planning Report     |            |
+| 15.18 | Database Growth Forecast     |            |
+| 15.19 | User Access Audit            |            |
+| 15.20 | Index Optimization Review    |            |
+| 15.21 | Cluster Configuration Review |            |
 
 ---
 
@@ -337,11 +337,11 @@
 
 | No    | Activity                      | Automation |
 | ----- | ----------------------------- | ---------- |
-| 15.22 | Version Upgrade Assessment    | Automated  |
-| 15.23 | DR Drill Validation           | Automated  |
-| 15.24 | Security Compliance Audit     | Automated  |
-| 15.25 | License / Subscription Review | Automated  |
-| 15.26 | Architecture Review Report    | Automated  |
+| 15.22 | Version Upgrade Assessment    |            |
+| 15.23 | DR Drill Validation           |            |
+| 15.24 | Security Compliance Audit     |            |
+| 15.25 | License / Subscription Review |            |
+| 15.26 | Architecture Review Report    |            |
 
 ---
 
