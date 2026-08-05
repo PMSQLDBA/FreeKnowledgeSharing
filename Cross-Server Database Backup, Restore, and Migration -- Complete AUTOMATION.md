@@ -1,3 +1,4 @@
+<img width="1585" height="498" alt="sample output" src="https://github.com/user-attachments/assets/6b38365d-5324-4936-bf08-97511db6aeb1" />
 ### Cross-Server Database Backup, Restore, and Migration -- Complete AUTOMATION
 
 #### 1. Purpose & Overview
@@ -74,8 +75,7 @@ EXEC [dbo].[usp_Generate_CrossServer_BackupRestore_V1]
 
 Sample output:
 
-<img width="1585" height="498" alt="image" src="https://github.com/user-attachments/assets/2490ea20-7910-4696-b7d7-3e38ad431b66" />
-
+<img width="1585" height="498" alt="sample output" src="https://github.com/user-attachments/assets/ec20c964-30b9-4fd7-8a55-a74fc2b8e09f" />
 
 --Below is the main SP: 
 
