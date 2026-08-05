@@ -6,6 +6,10 @@
 This Standard Operating Procedure (SOP) defines the process for executing automated, single or bulk database migrations using the stored procedure `[dbo].[usp_Generate_CrossServer_BackupRestore_V1]`. 
 This procedure automates source backups, dynamic target file path discovery, pre-flight safety validations, database restores with engine-level error trapping (such as disk volume limits), compatibility updates, orphaned user remediation, and HTML email auditing.
 
+Sample output:
+
+<img width="1585" height="498" alt="sample output" src="https://github.com/user-attachments/assets/ec20c964-30b9-4fd7-8a55-a74fc2b8e09f" />
+
 ---
 
 #### 2. Prerequisites
@@ -72,10 +76,6 @@ EXEC [dbo].[usp_Generate_CrossServer_BackupRestore_V1]
      @SetTargetCompatibility = 1,
      @EmailProfile           = 'DBAAlerts', -- Replace with your SQL Database Mail Profile name
      @NotificationEmail      = 'sqldbateam2026'; -- Replace with the recipient email address(es)
-
-Sample output:
-
-<img width="1585" height="498" alt="sample output" src="https://github.com/user-attachments/assets/ec20c964-30b9-4fd7-8a55-a74fc2b8e09f" />
 
 --Below is the main SP: 
 
