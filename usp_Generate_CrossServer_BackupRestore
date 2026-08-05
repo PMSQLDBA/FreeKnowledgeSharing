@@ -8,6 +8,7 @@ Key Enhancements Made:
 2) Orphan User Resolution: Includes an automated loop utilizing `sys.database_principals` to auto-map SQL users to server logins after the restore completes.
 3) Smart Overwrite Logic: Checks the destination metadata to dynamically use `REPLACE` or safe-restore based on your `@OverwriteExisting` toggle.
 4) Dynamic Compatibility Upgrades: Automatically evaluates the destination instance version to apply the appropriate `COMPATIBILITY_LEVEL` if left as default.
+
 *********************
 Stored Procedure Code
 *********************
