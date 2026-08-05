@@ -74,7 +74,7 @@ EXEC [dbo].[usp_Generate_CrossServer_BackupRestore_V1]
      @AutoFixOrphanUsers     = 1,
      @SetTargetCompatibility = 1,
      @EmailProfile           = 'DBAAlerts', -- Replace with your SQL Database Mail Profile name
-     @NotificationEmail      = 'sqldbateam2026'; -- Replace with the recipient email address(es)
+     @NotificationEmail      = 'sqldbateam2026@gmail.com'; -- Replace with the recipient email address(es)
 
 --Below is the main SP: 
 
