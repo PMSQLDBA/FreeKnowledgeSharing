@@ -1,4 +1,4 @@
-# PostgreSQL DBA PowerShell/Python Automation Framework
+# PostgreSQL DBA Automation Framework
 
 ## 1. PostgreSQL Server Administration
 
