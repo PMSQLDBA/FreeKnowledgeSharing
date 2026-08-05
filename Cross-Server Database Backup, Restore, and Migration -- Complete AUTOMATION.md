@@ -82,7 +82,7 @@ EXEC [dbo].[usp_Generate_CrossServer_BackupRestore_V1]
 USE DBAScripts
 GO
 
-CREATE OR ALTER PROCEDURE [dbo].[usp_Generate_CrossServer_BackupRestore_V3]
+CREATE OR ALTER PROCEDURE [dbo].[usp_Generate_CrossServer_BackupRestore_V1]
 (
       @SourceServer         SYSNAME = NULL,
       @SourceDatabaseNames   VARCHAR(MAX),
