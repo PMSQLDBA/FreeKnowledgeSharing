@@ -1,4 +1,3 @@
-<img width="1585" height="498" alt="sample output" src="https://github.com/user-attachments/assets/6b38365d-5324-4936-bf08-97511db6aeb1" />
 ### Cross-Server Database Backup, Restore, and Migration -- Complete AUTOMATION
 
 #### 1. Purpose & Overview
@@ -8,7 +7,7 @@ This procedure automates source backups, dynamic target file path discovery, pre
 
 Sample output:
 
-<img width="1585" height="498" alt="sample output" src="https://github.com/user-attachments/assets/ec20c964-30b9-4fd7-8a55-a74fc2b8e09f" />
+<img width="1585" height="498" alt="sample output" src="https://github.com/user-attachments/assets/78c32aad-d418-453b-aacc-df89c2541697" />
 
 ---
 
