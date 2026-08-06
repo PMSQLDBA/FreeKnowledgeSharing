@@ -50,14 +50,19 @@ The captured output is itself a valid T-SQL script (starts with `GO`/`USE` block
 ============================================================================================
 
 USE [master];
+
 GO
 
 SET ANSI_NULLS ON;
+
 GO
+
 SET QUOTED_IDENTIFIER ON;
+
 GO
 
 IF OBJECT_ID('dbo.usp_GenerateUserPermissionsScript', 'P') IS NOT NULL
+
     DROP PROCEDURE dbo.usp_GenerateUserPermissionsScript;
 GO
 
