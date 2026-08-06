@@ -67,8 +67,11 @@ IF OBJECT_ID('dbo.usp_GenerateUserPermissionsScript', 'P') IS NOT NULL
 GO
 
 CREATE PROCEDURE dbo.usp_GenerateUserPermissionsScript
+
     @DatabaseNames NVARCHAR(MAX)
+    
 AS
+
 BEGIN
     SET NOCOUNT ON;
 
