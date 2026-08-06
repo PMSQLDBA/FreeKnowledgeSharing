@@ -31,6 +31,11 @@ EXEC master.dbo.usp_GenerateUserPermissionsScript @DatabaseNames = 'SalesDB, HRD
 - `@DatabaseNames` is a **comma-separated list** of database names (whitespace around names is trimmed).
 - Passing an empty or all-whitespace string raises an error (`RAISERROR`) and exits.
 
+Sample output:
+
+  <img width="1357" height="787" alt="OutputNew" src="https://github.com/user-attachments/assets/3a27866f-e0f3-4f27-a39d-16efe3804fa7" />
+
+
 ### 3. Capture the output
 The procedure only `PRINT`s the script — it does not return a result set or write to a file. To use the generated script you need to capture the "Messages" output:
 - **SSMS**: Set output mode to "Results to Text" (Ctrl+T) before running, then save/copy the Messages pane content. `PRINT` output can also be truncated in SSMS for very large scripts — check your `Tools > Options > Query Results > Text` output width settings if the output looks cut off.
