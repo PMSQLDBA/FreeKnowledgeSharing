@@ -47,276 +47,274 @@ The captured output is itself a valid T-SQL script (starts with `GO`/`USE` block
 - **Order matters**: run the four generated sections in order (users → roles → database grants → object grants), since roles/grants reference users that must already exist.
 - **Idempotency**: only the `CREATE USER` statements are wrapped in existence checks; re-running the role/grant sections is generally safe since `ALTER ROLE ... ADD MEMBER` and `GRANT` are themselves idempotent in SQL Server, but duplicate `DENY`/`REVOKE` ordering nuances are worth a quick review before bulk-applying.
 
-============================================================================================
+## Full Source
 
-**USE** [master]; GO
-
-**SET** ANSI_NULLS ON; GO **SET** QUOTED_IDENTIFIER ON; GO
-
-IF OBJECT_ID('dbo.usp_GenerateUserPermissionsScript', 'P') IS **NOT** **NULL**
-    **DROP** **PROCEDURE** dbo.usp_GenerateUserPermissionsScript;
+```sql
+USE [master];
 GO
 
-**CREATE** **PROCEDURE** dbo.usp_GenerateUserPermissionsScript
-    @DatabaseNames **NVARCHAR**(**MAX**)
+SET ANSI_NULLS ON;
+GO
+SET QUOTED_IDENTIFIER ON;
+GO
+
+IF OBJECT_ID('dbo.usp_GenerateUserPermissionsScript', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.usp_GenerateUserPermissionsScript;
+GO
+
+CREATE PROCEDURE dbo.usp_GenerateUserPermissionsScript
+    @DatabaseNames NVARCHAR(MAX)
 AS
-**BEGIN**
-    **SET** **NOCOUNT** ON;
+BEGIN
+    SET NOCOUNT ON;
 
-    IF **LTRIM**(**RTRIM**(**ISNULL**(@DatabaseNames, ''))) = ''
-    **BEGIN**
-    **RAISERROR**('The @DatabaseNames parameter cannot be empty.', 16, 1);
-    **RETURN**;
-    **END**
+    IF LTRIM(RTRIM(ISNULL(@DatabaseNames, ''))) = ''
+    BEGIN
+        RAISERROR('The @DatabaseNames parameter cannot be empty.', 16, 1);
+        RETURN;
+    END
 
-    **DECLARE** @TargetDBs **TABLE** (DbName **SYSNAME** **PRIMARY** **KEY**);
+    DECLARE @TargetDBs TABLE (DbName SYSNAME PRIMARY KEY);
 
-    **INSERT** **INTO** @TargetDBs (DbName)
-    **SELECT** **LTRIM**(**RTRIM**(value))
-    **FROM** STRING_SPLIT(@DatabaseNames, ',')
-    **WHERE** **LTRIM**(**RTRIM**(value)) <> '';
+    INSERT INTO @TargetDBs (DbName)
+    SELECT LTRIM(RTRIM(value))
+    FROM STRING_SPLIT(@DatabaseNames, ',')
+    WHERE LTRIM(RTRIM(value)) <> '';
 
-    **PRINT** '----------------------------------------------------------------------------------';
-    **PRINT** '-- **CONSOLIDATED** **USER** & **PERMISSION** **SCRIPT** **GENERATOR** (**SQL** Server **2016** - **2025**)';
-    **PRINT** '-- Target Databases: ' + @DatabaseNames;
-    **PRINT** '----------------------------------------------------------------------------------';
-    **PRINT** '';
+    PRINT '----------------------------------------------------------------------------------';
+    PRINT '-- CONSOLIDATED USER & PERMISSION SCRIPT GENERATOR (SQL Server 2016 - 2025)';
+    PRINT '-- Target Databases: ' + @DatabaseNames;
+    PRINT '----------------------------------------------------------------------------------';
+    PRINT '';
 
-    **DECLARE** @CurrentDB **SYSNAME**;
-    **DECLARE** @**SQL** **NVARCHAR**(**MAX**);
-    **DECLARE** @ScriptLine **NVARCHAR**(**MAX**);
-
-    -- =========================================================================
-    -- 1. **GENERATE** **USER** **CREATION** **SCRIPTS**
-    -- =========================================================================
-    **PRINT** '----------------------------------------------------------------------------------';
-    **PRINT** '-- 1. **DATABASE** **USERS** **CREATION** **SCRIPTS**';
-    **PRINT** '----------------------------------------------------------------------------------';
-
-    **DECLARE** db_cursor_users **CURSOR** **LOCAL** FAST_FORWARD **FOR**
-    **SELECT** DbName **FROM** @TargetDBs **ORDER** BY DbName;
-
-    **OPEN** db_cursor_users;
-    **FETCH** **NEXT** **FROM** db_cursor_users **INTO** @CurrentDB;
-
-    **WHILE** @@FETCH_STATUS = 0
-    **BEGIN**
-    **PRINT** 'GO';
-    **PRINT** '**USE** [' + @CurrentDB + '];';
-    **PRINT** 'GO';
-
-    **SET** @**SQL** = N'
-    **USE** [' + @CurrentDB + '];
-    
-    **DECLARE** script_cursor **CURSOR** **LOCAL** FAST_FORWARD **FOR**
-    **SELECT** 
-    ''IF **NOT** **EXISTS** (**SELECT** * **FROM** sys.database_principals **WHERE** name = '''''' + u.name + '''''')'' + **CHAR**(13) + **CHAR**(10) +
-    ''    **CREATE** **USER** '' + **QUOTENAME**(u.name) + 
-    **CASE** 
-    **WHEN** u.type IN (''S'', ''U'', ''G'') **AND** l.name IS **NOT** **NULL** **THEN** '' **FOR** **LOGIN** '' + **QUOTENAME**(l.name)
-    **ELSE** '' **WITHOUT** **LOGIN**''
-    **END** +
-    **ISNULL**('' **WITH** DEFAULT_SCHEMA = '' + **QUOTENAME**(u.default_schema_name), '''') + '';''
-    **FROM** sys.database_principals u
-    **LEFT** **JOIN** sys.server_principals l ON u.sid = l.sid
-    **WHERE** u.principal_id > 4 
-    **AND** u.type IN (''S'', ''U'', ''G'');';
-
-    -- Use dynamic execution with an inner cursor to **PRINT** lines cleanly
-    **DECLARE** @InnerExec **NVARCHAR**(**MAX**) = @**SQL** + N'
-    **DECLARE** @Line **NVARCHAR**(**MAX**);
-    **OPEN** script_cursor;
-    **FETCH** **NEXT** **FROM** script_cursor **INTO** @Line;
-    **WHILE** @@FETCH_STATUS = 0
-    **BEGIN**
-    **PRINT** @Line;
-    **FETCH** **NEXT** **FROM** script_cursor **INTO** @Line;
-    **END**
-    **CLOSE** script_cursor;
-    **DEALLOCATE** script_cursor;';
-
-        **EXEC** sp_executesql @InnerExec;
-
-    **FETCH** **NEXT** **FROM** db_cursor_users **INTO** @CurrentDB;
-    **END**
-
-    **CLOSE** db_cursor_users;
-    **DEALLOCATE** db_cursor_users;
+    DECLARE @CurrentDB SYSNAME;
+    DECLARE @SQL NVARCHAR(MAX);
+    DECLARE @ScriptLine NVARCHAR(MAX);
 
     -- =========================================================================
-    -- 2. **GENERATE** **ROLE** **MEMBERSHIPS**
+    -- 1. GENERATE USER CREATION SCRIPTS
     -- =========================================================================
-    **PRINT** '';
-    **PRINT** '----------------------------------------------------------------------------------';
-    **PRINT** '-- 2. **DATABASE** **ROLE** **MEMBERSHIPS** (**ALTER** **ROLE** syntax)';
-    **PRINT** '----------------------------------------------------------------------------------';
+    PRINT '----------------------------------------------------------------------------------';
+    PRINT '-- 1. DATABASE USERS CREATION SCRIPTS';
+    PRINT '----------------------------------------------------------------------------------';
 
-    **DECLARE** db_cursor_roles **CURSOR** **LOCAL** FAST_FORWARD **FOR**
-    **SELECT** DbName **FROM** @TargetDBs **ORDER** BY DbName;
+    DECLARE db_cursor_users CURSOR LOCAL FAST_FORWARD FOR
+        SELECT DbName FROM @TargetDBs ORDER BY DbName;
 
-    **OPEN** db_cursor_roles;
-    **FETCH** **NEXT** **FROM** db_cursor_roles **INTO** @CurrentDB;
+    OPEN db_cursor_users;
+    FETCH NEXT FROM db_cursor_users INTO @CurrentDB;
 
-    **WHILE** @@FETCH_STATUS = 0
-    **BEGIN**
-    **PRINT** 'GO';
-    **PRINT** '**USE** [' + @CurrentDB + '];';
-    **PRINT** 'GO';
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        PRINT 'GO';
+        PRINT 'USE [' + @CurrentDB + '];';
+        PRINT 'GO';
 
-    **SET** @**SQL** = N'
-    **USE** [' + @CurrentDB + '];
+        SET @SQL = N'
+        USE [' + @CurrentDB + '];
+        
+        DECLARE script_cursor CURSOR LOCAL FAST_FORWARD FOR
+        SELECT 
+            ''IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = '''''' + u.name + '''''')'' + CHAR(13) + CHAR(10) +
+            ''    CREATE USER '' + QUOTENAME(u.name) + 
+            CASE 
+                WHEN u.type IN (''S'', ''U'', ''G'') AND l.name IS NOT NULL THEN '' FOR LOGIN '' + QUOTENAME(l.name)
+                ELSE '' WITHOUT LOGIN''
+            END +
+            ISNULL('' WITH DEFAULT_SCHEMA = '' + QUOTENAME(u.default_schema_name), '''') + '';''
+        FROM sys.database_principals u
+        LEFT JOIN sys.server_principals l ON u.sid = l.sid
+        WHERE u.principal_id > 4 
+          AND u.type IN (''S'', ''U'', ''G'');';
 
-    **DECLARE** script_cursor **CURSOR** **LOCAL** FAST_FORWARD **FOR**
-    **SELECT** 
-    ''**ALTER** **ROLE** '' + **QUOTENAME**(USER_NAME(rm.role_principal_id)) + 
-    '' **ADD** **MEMBER** '' + **QUOTENAME**(usr.name) + '';''
-    **FROM** sys.database_role_members AS rm
-    **JOIN** sys.database_principals AS usr ON rm.member_principal_id = usr.principal_id
-    **WHERE** usr.principal_id > 4 
-    **AND** usr.type_desc IN (''SQL_USER'', ''WINDOWS_USER'', ''WINDOWS_GROUP'')
-    **ORDER** BY rm.role_principal_id **ASC**;';
+        -- Use dynamic execution with an inner cursor to PRINT lines cleanly
+        DECLARE @InnerExec NVARCHAR(MAX) = @SQL + N'
+        DECLARE @Line NVARCHAR(MAX);
+        OPEN script_cursor;
+        FETCH NEXT FROM script_cursor INTO @Line;
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+            PRINT @Line;
+            FETCH NEXT FROM script_cursor INTO @Line;
+        END
+        CLOSE script_cursor;
+        DEALLOCATE script_cursor;';
 
-    **SET** @InnerExec = @**SQL** + N'
-    **DECLARE** @Line **NVARCHAR**(**MAX**);
-    **OPEN** script_cursor;
-    **FETCH** **NEXT** **FROM** script_cursor **INTO** @Line;
-    **WHILE** @@FETCH_STATUS = 0
-    **BEGIN**
-    **PRINT** @Line;
-    **FETCH** **NEXT** **FROM** script_cursor **INTO** @Line;
-    **END**
-    **CLOSE** script_cursor;
-    **DEALLOCATE** script_cursor;';
+        EXEC sp_executesql @InnerExec;
 
-        **EXEC** sp_executesql @InnerExec;
+        FETCH NEXT FROM db_cursor_users INTO @CurrentDB;
+    END
 
-    **FETCH** **NEXT** **FROM** db_cursor_roles **INTO** @CurrentDB;
-    **END**
-
-    **CLOSE** db_cursor_roles;
-    **DEALLOCATE** db_cursor_roles;
-
-    -- =========================================================================
-    -- 3. **GENERATE** **DATABASE** **LEVEL** **GRANTS**
-    -- =========================================================================
-    **PRINT** '';
-    **PRINT** '----------------------------------------------------------------------------------';
-    **PRINT** '-- 3. **DATABASE** **LEVEL** **PERMISSIONS** (**GRANTS**)';
-    **PRINT** '----------------------------------------------------------------------------------';
-
-    **DECLARE** db_cursor_db_perms **CURSOR** **LOCAL** FAST_FORWARD **FOR**
-    **SELECT** DbName **FROM** @TargetDBs **ORDER** BY DbName;
-
-    **OPEN** db_cursor_db_perms;
-    **FETCH** **NEXT** **FROM** db_cursor_db_perms **INTO** @CurrentDB;
-
-    **WHILE** @@FETCH_STATUS = 0
-    **BEGIN**
-    **PRINT** 'GO';
-    **PRINT** '**USE** [' + @CurrentDB + '];';
-    **PRINT** 'GO';
-
-    **SET** @**SQL** = N'
-    **USE** [' + @CurrentDB + '];
-
-    **DECLARE** script_cursor **CURSOR** **LOCAL** FAST_FORWARD **FOR**
-    **SELECT** 
-    **CASE** **WHEN** perm.state <> ''W'' **THEN** perm.state_desc **ELSE** ''**GRANT**'' **END** + 
-    '' '' + perm.permission_name + 
-    '' TO '' + **QUOTENAME**(usr.name) **COLLATE** database_default + 
-    **CASE** **WHEN** perm.state <> ''W'' **THEN** '''' **ELSE** '' **WITH** **GRANT** **OPTION**'' **END** + '';''
-    **FROM** sys.database_permissions AS perm
-    **JOIN** sys.database_principals AS usr ON perm.grantee_principal_id = usr.principal_id
-    **WHERE** usr.principal_id > 4 
-    **AND** usr.type_desc IN (''SQL_USER'', ''WINDOWS_USER'', ''WINDOWS_GROUP'')
-    **AND** perm.class_desc = ''**DATABASE**''
-    **ORDER** BY perm.permission_name **ASC**, perm.state_desc **ASC**;';
-
-    **SET** @InnerExec = @**SQL** + N'
-    **DECLARE** @Line **NVARCHAR**(**MAX**);
-    **OPEN** script_cursor;
-    **FETCH** **NEXT** **FROM** script_cursor **INTO** @Line;
-    **WHILE** @@FETCH_STATUS = 0
-    **BEGIN**
-    **PRINT** @Line;
-    **FETCH** **NEXT** **FROM** script_cursor **INTO** @Line;
-    **END**
-    **CLOSE** script_cursor;
-    **DEALLOCATE** script_cursor;';
-
-        **EXEC** sp_executesql @InnerExec;
-
-    **FETCH** **NEXT** **FROM** db_cursor_db_perms **INTO** @CurrentDB;
-    **END**
-
-    **CLOSE** db_cursor_db_perms;
-    **DEALLOCATE** db_cursor_db_perms;
+    CLOSE db_cursor_users;
+    DEALLOCATE db_cursor_users;
 
     -- =========================================================================
-    -- 4. **GENERATE** **OBJECT** OR **COLUMN** **LEVEL** **GRANTS**
+    -- 2. GENERATE ROLE MEMBERSHIPS
     -- =========================================================================
-    **PRINT** '';
-    **PRINT** '----------------------------------------------------------------------------------';
-    **PRINT** '-- 4. **OBJECT** OR **COLUMN** **LEVEL** **PERMISSIONS**';
-    **PRINT** '----------------------------------------------------------------------------------';
+    PRINT '';
+    PRINT '----------------------------------------------------------------------------------';
+    PRINT '-- 2. DATABASE ROLE MEMBERSHIPS (ALTER ROLE syntax)';
+    PRINT '----------------------------------------------------------------------------------';
 
-    **DECLARE** db_cursor_obj_perms **CURSOR** **LOCAL** FAST_FORWARD **FOR**
-    **SELECT** DbName **FROM** @TargetDBs **ORDER** BY DbName;
+    DECLARE db_cursor_roles CURSOR LOCAL FAST_FORWARD FOR
+        SELECT DbName FROM @TargetDBs ORDER BY DbName;
 
-    **OPEN** db_cursor_obj_perms;
-    **FETCH** **NEXT** **FROM** db_cursor_obj_perms **INTO** @CurrentDB;
+    OPEN db_cursor_roles;
+    FETCH NEXT FROM db_cursor_roles INTO @CurrentDB;
 
-    **WHILE** @@FETCH_STATUS = 0
-    **BEGIN**
-    **PRINT** 'GO';
-    **PRINT** '**USE** [' + @CurrentDB + '];';
-    **PRINT** 'GO';
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        PRINT 'GO';
+        PRINT 'USE [' + @CurrentDB + '];';
+        PRINT 'GO';
 
-    **SET** @**SQL** = N'
-    **USE** [' + @CurrentDB + '];
+        SET @SQL = N'
+        USE [' + @CurrentDB + '];
 
-    **DECLARE** script_cursor **CURSOR** **LOCAL** FAST_FORWARD **FOR**
-    **SELECT** 
-    **CASE** **WHEN** perm.state <> ''W'' **THEN** perm.state_desc **ELSE** ''**GRANT**'' **END** + 
-    '' '' + perm.permission_name + 
-    '' ON '' + **QUOTENAME**(SCHEMA_NAME(obj.schema_id)) + ''.'' + **QUOTENAME**(obj.name) + 
-    **ISNULL**(''('' + **QUOTENAME**(cl.name) + '')'', '''') + 
-    '' TO '' + **QUOTENAME**(usr.name) **COLLATE** database_default + 
-    **CASE** **WHEN** perm.state <> ''W'' **THEN** '''' **ELSE** '' **WITH** **GRANT** **OPTION**'' **END** + '';''
-    **FROM** sys.database_permissions AS perm
-    **JOIN** sys.objects AS obj ON perm.major_id = obj.object_id
-    **JOIN** sys.database_principals AS usr ON perm.grantee_principal_id = usr.principal_id
-    **LEFT** **JOIN** sys.columns AS cl ON cl.column_id = perm.minor_id **AND** cl.object_id = perm.major_id
-    **WHERE** usr.principal_id > 4 
-    **AND** usr.type_desc IN (''SQL_USER'', ''WINDOWS_USER'', ''WINDOWS_GROUP'')
-    **ORDER** BY perm.permission_name **ASC**, perm.state_desc **ASC**;';
+        DECLARE script_cursor CURSOR LOCAL FAST_FORWARD FOR
+        SELECT 
+            ''ALTER ROLE '' + QUOTENAME(USER_NAME(rm.role_principal_id)) + 
+            '' ADD MEMBER '' + QUOTENAME(usr.name) + '';''
+        FROM sys.database_role_members AS rm
+        JOIN sys.database_principals AS usr ON rm.member_principal_id = usr.principal_id
+        WHERE usr.principal_id > 4 
+          AND usr.type_desc IN (''SQL_USER'', ''WINDOWS_USER'', ''WINDOWS_GROUP'')
+        ORDER BY rm.role_principal_id ASC;';
 
-    **SET** @InnerExec = @**SQL** + N'
-    **DECLARE** @Line **NVARCHAR**(**MAX**);
-    **OPEN** script_cursor;
-    **FETCH** **NEXT** **FROM** script_cursor **INTO** @Line;
-    **WHILE** @@FETCH_STATUS = 0
-    **BEGIN**
-    **PRINT** @Line;
-    **FETCH** **NEXT** **FROM** script_cursor **INTO** @Line;
-    **END**
-    **CLOSE** script_cursor;
-    **DEALLOCATE** script_cursor;';
+        SET @InnerExec = @SQL + N'
+        DECLARE @Line NVARCHAR(MAX);
+        OPEN script_cursor;
+        FETCH NEXT FROM script_cursor INTO @Line;
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+            PRINT @Line;
+            FETCH NEXT FROM script_cursor INTO @Line;
+        END
+        CLOSE script_cursor;
+        DEALLOCATE script_cursor;';
 
-        **EXEC** sp_executesql @InnerExec;
+        EXEC sp_executesql @InnerExec;
 
-    **FETCH** **NEXT** **FROM** db_cursor_obj_perms **INTO** @CurrentDB;
-    **END**
+        FETCH NEXT FROM db_cursor_roles INTO @CurrentDB;
+    END
 
-    **CLOSE** db_cursor_obj_perms;
-    **DEALLOCATE** db_cursor_obj_perms;
+    CLOSE db_cursor_roles;
+    DEALLOCATE db_cursor_roles;
 
-    **PRINT** '';
-    **PRINT** '----------------------------------------------------------------------------------';
-    **PRINT** '-- **SCRIPT** **GENERATION** **COMPLETE**';
-    **PRINT** '----------------------------------------------------------------------------------';
-**END**;
-GO
+    -- =========================================================================
+    -- 3. GENERATE DATABASE LEVEL GRANTS
+    -- =========================================================================
+    PRINT '';
+    PRINT '----------------------------------------------------------------------------------';
+    PRINT '-- 3. DATABASE LEVEL PERMISSIONS (GRANTS)';
+    PRINT '----------------------------------------------------------------------------------';
+
+    DECLARE db_cursor_db_perms CURSOR LOCAL FAST_FORWARD FOR
+        SELECT DbName FROM @TargetDBs ORDER BY DbName;
+
+    OPEN db_cursor_db_perms;
+    FETCH NEXT FROM db_cursor_db_perms INTO @CurrentDB;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        PRINT 'GO';
+        PRINT 'USE [' + @CurrentDB + '];';
+        PRINT 'GO';
+
+        SET @SQL = N'
+        USE [' + @CurrentDB + '];
+
+        DECLARE script_cursor CURSOR LOCAL FAST_FORWARD FOR
+        SELECT 
+            CASE WHEN perm.state <> ''W'' THEN perm.state_desc ELSE ''GRANT'' END + 
+            '' '' + perm.permission_name + 
+            '' TO '' + QUOTENAME(usr.name) COLLATE database_default + 
+            CASE WHEN perm.state <> ''W'' THEN '''' ELSE '' WITH GRANT OPTION'' END + '';''
+        FROM sys.database_permissions AS perm
+        JOIN sys.database_principals AS usr ON perm.grantee_principal_id = usr.principal_id
+        WHERE usr.principal_id > 4 
+          AND usr.type_desc IN (''SQL_USER'', ''WINDOWS_USER'', ''WINDOWS_GROUP'')
+          AND perm.class_desc = ''DATABASE''
+        ORDER BY perm.permission_name ASC, perm.state_desc ASC;';
+
+        SET @InnerExec = @SQL + N'
+        DECLARE @Line NVARCHAR(MAX);
+        OPEN script_cursor;
+        FETCH NEXT FROM script_cursor INTO @Line;
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+            PRINT @Line;
+            FETCH NEXT FROM script_cursor INTO @Line;
+        END
+        CLOSE script_cursor;
+        DEALLOCATE script_cursor;';
+
+        EXEC sp_executesql @InnerExec;
+
+        FETCH NEXT FROM db_cursor_db_perms INTO @CurrentDB;
+    END
+
+    CLOSE db_cursor_db_perms;
+    DEALLOCATE db_cursor_db_perms;
+
+    -- =========================================================================
+    -- 4. GENERATE OBJECT OR COLUMN LEVEL GRANTS
+    -- =========================================================================
+    PRINT '';
+    PRINT '----------------------------------------------------------------------------------';
+    PRINT '-- 4. OBJECT OR COLUMN LEVEL PERMISSIONS';
+    PRINT '----------------------------------------------------------------------------------';
+
+    DECLARE db_cursor_obj_perms CURSOR LOCAL FAST_FORWARD FOR
+        SELECT DbName FROM @TargetDBs ORDER BY DbName;
+
+    OPEN db_cursor_obj_perms;
+    FETCH NEXT FROM db_cursor_obj_perms INTO @CurrentDB;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        PRINT 'GO';
+        PRINT 'USE [' + @CurrentDB + '];';
+        PRINT 'GO';
+
+        SET @SQL = N'
+        USE [' + @CurrentDB + '];
+
+        DECLARE script_cursor CURSOR LOCAL FAST_FORWARD FOR
+        SELECT 
+            CASE WHEN perm.state <> ''W'' THEN perm.state_desc ELSE ''GRANT'' END + 
+            '' '' + perm.permission_name + 
+            '' ON '' + QUOTENAME(SCHEMA_NAME(obj.schema_id)) + ''.'' + QUOTENAME(obj.name) + 
+            ISNULL(''('' + QUOTENAME(cl.name) + '')'', '''') + 
+            '' TO '' + QUOTENAME(usr.name) COLLATE database_default + 
+            CASE WHEN perm.state <> ''W'' THEN '''' ELSE '' WITH GRANT OPTION'' END + '';''
+        FROM sys.database_permissions AS perm
+        JOIN sys.objects AS obj ON perm.major_id = obj.object_id
+        JOIN sys.database_principals AS usr ON perm.grantee_principal_id = usr.principal_id
+        LEFT JOIN sys.columns AS cl ON cl.column_id = perm.minor_id AND cl.object_id = perm.major_id
+        WHERE usr.principal_id > 4 
+          AND usr.type_desc IN (''SQL_USER'', ''WINDOWS_USER'', ''WINDOWS_GROUP'')
+        ORDER BY perm.permission_name ASC, perm.state_desc ASC;';
+
+        SET @InnerExec = @SQL + N'
+        DECLARE @Line NVARCHAR(MAX);
+        OPEN script_cursor;
+        FETCH NEXT FROM script_cursor INTO @Line;
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+            PRINT @Line;
+            FETCH NEXT FROM script_cursor INTO @Line;
+        END
+        CLOSE script_cursor;
+        DEALLOCATE script_cursor;';
+
+        EXEC sp_executesql @InnerExec;
+
+        FETCH NEXT FROM db_cursor_obj_perms INTO @CurrentDB;
+    END
+
+    CLOSE db_cursor_obj_perms;
+    DEALLOCATE db_cursor_obj_perms;
 
     PRINT '';
     PRINT '----------------------------------------------------------------------------------';
@@ -324,3 +322,4 @@ GO
     PRINT '----------------------------------------------------------------------------------';
 END;
 GO
+```
