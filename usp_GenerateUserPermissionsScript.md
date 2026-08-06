@@ -47,7 +47,7 @@ The captured output is itself a valid T-SQL script (starts with `GO`/`USE` block
 - **Order matters**: run the four generated sections in order (users → roles → database grants → object grants), since roles/grants reference users that must already exist.
 - **Idempotency**: only the `CREATE USER` statements are wrapped in existence checks; re-running the role/grant sections is generally safe since `ALTER ROLE ... ADD MEMBER` and `GRANT` are themselves idempotent in SQL Server, but duplicate `DENY`/`REVOKE` ordering nuances are worth a quick review before bulk-applying.
 
-============================================================================================================================================================================================
+=========================================================================================================================================================
 
 USE [master];
 GO
